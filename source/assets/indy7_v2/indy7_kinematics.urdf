@@ -1,0 +1,67 @@
+<?xml version="1.0"?>
+<!--
+  Kinematics-only Indy7 model for Isaac Sim's official PINK controller.
+
+  Joint origins/axes/limits were exported from indy7_v2.usd with Isaac Sim
+  6.0.1's isaacsim.asset.exporter.urdf.  Visual, collision, and inertial data
+  are intentionally omitted because the live USD/PhysX articulation owns the
+  plant; this file only supplies Pinocchio kinematics.
+-->
+<robot name="indy7_v2">
+  <link name="link0"/>
+  <link name="link1"/>
+  <link name="link2"/>
+  <link name="link3"/>
+  <link name="link4"/>
+  <link name="link5"/>
+  <link name="link6"/>
+  <link name="tcp"/>
+
+  <joint name="joint0" type="revolute">
+    <parent link="link0"/>
+    <child link="link1"/>
+    <origin xyz="0 0 0.07749999" rpy="0 1.57079627 0"/>
+    <axis xyz="-1 0 0"/>
+    <limit lower="-3.05432619" upper="3.05432619" velocity="1.00000001" effort="100"/>
+  </joint>
+  <joint name="joint1" type="revolute">
+    <parent link="link1"/>
+    <child link="link2"/>
+    <origin xyz="-0.22200006 -0.109 -0.00000003" rpy="-0.00000004 0.00000001 1.57079627"/>
+    <axis xyz="-1 0 0"/>
+    <limit lower="-3.05432619" upper="3.05432619" velocity="1.00000001" effort="100"/>
+  </joint>
+  <joint name="joint2" type="revolute">
+    <parent link="link2"/>
+    <child link="link3"/>
+    <origin xyz="0.03049965 0.45000013 -0.0000001" rpy="3.14159228 -0.00000014 0.00000053"/>
+    <axis xyz="-1 0 0"/>
+    <limit lower="-3.05432619" upper="3.05432619" velocity="1.00000001" effort="100"/>
+  </joint>
+  <joint name="joint3" type="revolute">
+    <parent link="link3"/>
+    <child link="link4"/>
+    <origin xyz="0.0750003 -0.26700004 0.00000006" rpy="-3.14159263 0.00000045 1.57079677"/>
+    <axis xyz="-1 0 0"/>
+    <limit lower="-3.05432619" upper="3.05432619" velocity="1.00000001" effort="100"/>
+  </joint>
+  <joint name="joint4" type="revolute">
+    <parent link="link4"/>
+    <child link="link5"/>
+    <origin xyz="-0.08300008 -0.11400003 0.00000003" rpy="0.00000013 0.00000013 1.5707963"/>
+    <axis xyz="-1 0 0"/>
+    <limit lower="-3.05432619" upper="3.05432619" velocity="1.00000001" effort="100"/>
+  </joint>
+  <joint name="joint5" type="revolute">
+    <parent link="link5"/>
+    <child link="link6"/>
+    <origin xyz="-0.08500006 0.05200009 -0.00000001" rpy="-0.00000006 -0.00000004 -1.5707963"/>
+    <axis xyz="-1 0 0"/>
+    <limit lower="-3.75245763" upper="3.75245763" velocity="1.00000001" effort="100"/>
+  </joint>
+  <joint name="tcp_joint" type="fixed">
+    <parent link="link6"/>
+    <child link="tcp"/>
+    <origin xyz="-0.06000005 0 -0.00000001" rpy="0 -1.57079618 -0.0000001"/>
+  </joint>
+</robot>

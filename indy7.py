@@ -20,57 +20,30 @@ SOURCE_DIR = os.path.join(ROOT_DIR, "source")
 if SOURCE_DIR not in sys.path:
     sys.path.insert(0, SOURCE_DIR)
 
-from isaacsim import SimulationApp
-
-INDY7_USD = os.path.join(
-    ROOT_DIR,
-    "source",
-    "assets",
-    "indy7_v2",
-    "indy7_v2_with_2f-140_d455.usd",
+from graspgen import config as graspgen_config
+from sim.config import (
+    CAMERA_CONFIG,
+    CONTROL_HZ,
+    INDY7_POSITION,
+    INDY7_PRIM_PATH,
+    INDY7_USD,
+    PHYSICS_HZ,
+    PHYSICS_DT,
+    RENDERING_HZ,
+    RENDERING_DT,
+    YCB_CONFIG,
 )
-INDY7_PRIM_PATH = "/World/indy7"
-INDY7_POSITION = [0.0, 0.0, 0.0]
-YCB_CONFIG = {
-    "usd_dir": "/Isaac/Props/YCB/Axis_Aligned_Physics/",
-    "objects": [
-        "003_cracker_box.usd",
-        "004_sugar_box.usd",
-        "005_tomato_soup_can.usd",
-        "006_mustard_bottle.usd",
-    ],
-    "count": 5,
-    "spawn": {
-        "radius_min": 0.35,
-        "radius_max": 0.55,
-        "angle_min": -1.2,
-        "angle_max": 1.2,
-        "z": 0.20,
-        "scale": 1.0,
-    },
-    "seed": 0,
-}
-CAMERA_CONFIG = {
-    # d455 mount + rsd455.usd reference are already baked into INDY7_USD at
-    # link6/d455 — WristCamera only re-poses the mount and wraps it.
-    "prim_name": "d455",
-    "asset_root_name": "RSD455",
-    "color_camera": "Camera_OmniVision_OV9782_Color",
-    "depth_camera": "Camera_Pseudo_Depth",
-    "resolution": [640, 480],
-    "mount_translation": [0.06031178594972571, 0.002541999360932995, 0.03876863710717515],
-    "mount_orientation": [0.7071067811865476, 0.0, -0.7071067811865475, 0.0],
-    "clipping_range": [0.01, 5.0],
-    "capture_depth": True,
-    "capture_every": 60,
-    "output_dir": "output/camera",
-}
-PHYSICS_DT = 1.0 / 60.0
-RENDERING_DT = 1.0 / 60.0
+
+from isaacsim import SimulationApp
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--headless", action="store_true", help="GUI 없이 실행")
 parser.add_argument("--max-steps", type=int, default=0, help="N 스텝 후 자동 종료 (0=무한)")
+parser.add_argument(
+    "--wrist-viewport",
+    action="store_true",
+    help="별도의 wrist-camera viewport를 연다(기본 off: 렌더 부하 절감)",
+)
 parser.add_argument("--target-position", type=float, nargs=3, metavar=("X", "Y", "Z"))
 parser.add_argument(
     "--target-orientation",
@@ -80,17 +53,73 @@ parser.add_argument(
     metavar=("W", "X", "Y", "Z"),
     help="목표 TCP orientation, Isaac wxyz quaternion",
 )
-parser.add_argument("--gripper", choices=["none", "open", "close"], default="none")
+parser.add_argument(
+    "--gripper",
+    choices=["open", "close", "hold"],
+    default="open",
+    help="그리퍼 초기/유지 명령(기본 open; hold은 USD 초기 자세 유지)",
+)
+parser.add_argument(
+    "--graspgen",
+    action="store_true",
+    help="wrist point cloud를 GraspGen ZMQ 서버로 보내고 grasp pose를 표시",
+)
+parser.add_argument("--graspgen-host", default=graspgen_config.HOST)
+parser.add_argument("--graspgen-port", type=int, default=graspgen_config.PORT)
+parser.add_argument("--graspgen-timeout-ms", type=int, default=graspgen_config.TIMEOUT_MS)
+parser.add_argument(
+    "--graspgen-step",
+    type=int,
+    default=graspgen_config.TRIGGER_STEP,
+    help="GraspGen을 한 번 호출할 simulation step",
+)
+parser.add_argument("--grasp-object-index", type=int, default=0, help="ycb_paths에서 선택할 object index")
+parser.add_argument("--grasp-point-count", type=int, default=graspgen_config.POINT_COUNT)
+parser.add_argument("--grasp-num-grasps", type=int, default=graspgen_config.NUM_GRASPS)
+parser.add_argument("--grasp-topk", type=int, default=graspgen_config.TOPK)
+parser.add_argument("--grasp-seed", type=int, default=graspgen_config.SEED)
+parser.add_argument(
+    "--execute-grasp",
+    action="store_true",
+    help="best grasp pose를 pregrasp→approach→close→lift 순서로 IK 실행 (--graspgen 필요)",
+)
 args, _ = parser.parse_known_args()
 
-simulation_app = SimulationApp({"headless": args.headless})
+cpu_threads = int(os.environ.get("ISAAC_INDY7_CPU_THREADS", "8"))
+if cpu_threads < 1:
+    raise ValueError("ISAAC_INDY7_CPU_THREADS must be >= 1")
+simulation_app = SimulationApp(
+    {
+        "headless": args.headless,
+        "limit_cpu_threads": cpu_threads,
+        "multi_gpu": False,
+    }
+)
 
 from isaacsim.core.api import World  # noqa: E402
+from isaacsim.core.utils.extensions import enable_extension  # noqa: E402
 from isaacsim.core.utils.viewports import set_camera_view  # noqa: E402
 
-from isaac_indy7.camera import WristCamera  # noqa: E402
-from isaac_indy7.indy7 import Indy7Gripper, Indy7IK, spawn_indy7  # noqa: E402
-from isaac_indy7.ycb import print_ycb_centers, spawn_ycb  # noqa: E402
+from control.grasp_execution import GraspExecutor  # noqa: E402
+from control.ik import Indy7Gripper, Indy7IK  # noqa: E402
+from graspgen.pointcloud import sample_fixed  # noqa: E402
+from graspgen.selection import select_executable_grasp  # noqa: E402
+from graspgen.visualization import draw_grasps, draw_pointcloud  # noqa: E402
+from sim.camera import WristCamera  # noqa: E402
+from sim.spawn import spawn_indy7  # noqa: E402
+from sim.ros2 import (  # noqa: E402
+    CLOCK_TOPIC,
+    JOINT_COMMAND_TOPIC,
+    JOINT_STATES_TOPIC,
+    TF_TOPIC,
+    create_ros2_action_graph,
+)
+from sim.ycb import (  # noqa: E402
+    get_world_bounds,
+    print_ycb_centers,
+    set_ycb_kinematic,
+    spawn_ycb,
+)
 
 
 def main() -> None:
@@ -99,10 +128,19 @@ def main() -> None:
     if not os.path.isfile(INDY7_USD):
         raise FileNotFoundError(f"indy7 USD 를 찾을 수 없음: {INDY7_USD}")
 
+    enable_extension("isaacsim.ros2.bridge")
+    enable_extension("isaacsim.robot_motion.pink")
+    enable_extension("isaacsim.robot_setup.assembler")
+    simulation_app.update()
+
     world = World(
         stage_units_in_meters=1.0,
         physics_dt=PHYSICS_DT,
         rendering_dt=RENDERING_DT,
+    )
+    print(
+        f"[timing] physics={PHYSICS_HZ}Hz render={RENDERING_HZ}Hz "
+        f"control={CONTROL_HZ}Hz substeps={PHYSICS_HZ // RENDERING_HZ}"
     )
     world.scene.add_default_ground_plane()
 
@@ -112,6 +150,11 @@ def main() -> None:
     ycb_paths = spawn_ycb(YCB_CONFIG, base_position=base_position)
 
     world.reset()
+    graph_path = create_ros2_action_graph(indy7.prim_path)
+    simulation_app.update()
+    print(f"[ros2] Action Graph: {graph_path}")
+    print(f"[ros2] Publisher: {JOINT_STATES_TOPIC}, {CLOCK_TOPIC}, {TF_TOPIC}")
+    print(f"[ros2] Subscriber: {JOINT_COMMAND_TOPIC}")
     set_camera_view(
         eye=[1.2, 1.0, 0.9],
         target=[0.35, 0.0, 0.15],
@@ -120,12 +163,39 @@ def main() -> None:
 
     ik = Indy7IK(indy7)
     gripper = Indy7Gripper(indy7)
-    wrist_camera = WristCamera(CAMERA_CONFIG, parent_prim=ik.link_path("link6"), workdir=ROOT_DIR)
+    camera_config = dict(CAMERA_CONFIG)
+    camera_config["enable_pointcloud"] = args.graspgen
+    wrist_camera = WristCamera(camera_config, parent_prim=ik.link_path("link6"), workdir=ROOT_DIR)
     wrist_camera.initialize()
-    if not args.headless:
+    if not args.headless and args.wrist_viewport:
         wrist_camera.open_secondary_viewport()
     print("[ik] Indy7IK ready")
     print_ycb_centers(ycb_paths)
+
+    if args.execute_grasp and not args.graspgen:
+        raise ValueError("--execute-grasp requires --graspgen")
+
+    graspgen_client = None
+    if args.graspgen:
+        from graspgen.client import GraspGenClient
+
+        if not 0 <= args.grasp_object_index < len(ycb_paths):
+            raise ValueError(
+                f"--grasp-object-index must be in [0, {len(ycb_paths) - 1}], "
+                f"got {args.grasp_object_index}"
+            )
+        graspgen_client = GraspGenClient(
+            host=args.graspgen_host,
+            port=args.graspgen_port,
+            timeout_ms=args.graspgen_timeout_ms,
+        )
+        if not graspgen_client.health_check():
+            raise RuntimeError(
+                f"GraspGen server is not ready at "
+                f"{args.graspgen_host}:{args.graspgen_port}. "
+                "Start it with ./scripts/run_graspgen_server.py"
+            )
+        print(f"[graspgen] connected: {graspgen_client.metadata()}")
 
     target_position = None if args.target_position is None else np.asarray(args.target_position, dtype=float)
     target_orientation = np.asarray(args.target_orientation, dtype=float)
@@ -143,44 +213,161 @@ def main() -> None:
         gripper.close()
         gripper_hold_target = gripper.closed_position
         print("[gripper] close")
-    else:
+    else:  # hold: preserve the joint state authored in the USD.
         gripper_hold_target = gripper.hold_position
 
     step = 0
     reset_needed = False
-    while simulation_app.is_running():
-        world.step(render=True)
+    graspgen_called = False
+    grasp_executor = None
+    grasp_phase = None
+    grasp_target_path = None
+    try:
+        while simulation_app.is_running():
+            world.step(render=True)
 
-        if world.is_stopped():
-            reset_needed = True
-        if not world.is_playing():
-            continue
-        if reset_needed:
-            world.reset()
-            ik = Indy7IK(indy7)
-            gripper = Indy7Gripper(indy7)
-            wrist_camera.initialize()
-            if not args.headless:
-                wrist_camera.open_secondary_viewport()
-            reset_needed = False
+            if world.is_stopped():
+                reset_needed = True
+            if not world.is_playing():
+                continue
+            if reset_needed:
+                world.reset()
+                ik = Indy7IK(indy7)
+                gripper = Indy7Gripper(indy7)
+                wrist_camera.initialize()
+                if not args.headless and args.wrist_viewport:
+                    wrist_camera.open_secondary_viewport()
+                graspgen_called = False
+                grasp_executor = None
+                grasp_phase = None
+                grasp_target_path = None
+                for ycb_path in ycb_paths:
+                    set_ycb_kinematic(ycb_path, True)
+                reset_needed = False
 
-        if target_position is not None:
-            reachable = ik.go_to(target_position, target_orientation)
+            if target_position is not None and not graspgen_called:
+                reachable = ik.go_to(target_position, target_orientation)
+                if step % 60 == 0:
+                    ee_pos, ee_quat = ik.ee_pose()
+                    print(
+                        f"[ik] step={step} reachable={reachable} "
+                        f"ee_pos={np.asarray(ee_pos).round(4).tolist()} "
+                        f"ee_quat={np.asarray(ee_quat).round(4).tolist()} "
+                        f"arm_q={np.asarray(indy7.get_joint_positions())[:6].round(3).tolist()} "
+                        f"gripper_q={gripper.hold_position:.4f}"
+                    )
+
+            if grasp_executor is not None:
+                if grasp_executor.active:
+                    phase = grasp_executor.step()
+                    if phase != grasp_phase:
+                        print(f"[grasp] phase: {grasp_phase} -> {phase}")
+                        if grasp_target_path is not None:
+                            object_min, object_max = get_world_bounds(grasp_target_path)
+                            object_center = 0.5 * (object_min + object_max)
+                            print(
+                                f"[grasp] target center={object_center.round(4).tolist()} "
+                                f"bottom_z={object_min[2]:.4f}"
+                            )
+                        if phase == "approach" and grasp_target_path is not None:
+                            set_ycb_kinematic(grasp_target_path, False)
+                            print(f"[grasp] released dynamic target: {grasp_target_path}")
+                        grasp_phase = phase
+                elif grasp_executor.phase == "done":
+                    gripper.close()
+                else:
+                    gripper.hold(gripper_hold_target)
+            else:
+                gripper.hold(gripper_hold_target)
             if step % 60 == 0:
-                ee_pos, ee_quat = ik.ee_pose()
                 print(
-                    f"[ik] step={step} reachable={reachable} "
-                    f"ee_pos={np.asarray(ee_pos).round(4).tolist()} "
-                    f"ee_quat={np.asarray(ee_quat).round(4).tolist()}"
+                    f"[gripper] step={step} q={gripper.hold_position:.4f} "
+                    f"target={gripper.target_position:.4f} "
+                    f"effort={gripper.measured_effort:.4f}"
                 )
+            wrist_camera.maybe_capture(step)
 
-        gripper.hold(gripper_hold_target)
-        wrist_camera.maybe_capture(step)
+            if graspgen_client is not None and not graspgen_called and step >= args.graspgen_step:
+                target_path = ycb_paths[args.grasp_object_index]
+                grasp_target_path = target_path
+                target_label = str(YCB_CONFIG["objects"][args.grasp_object_index]["name"])
+                object_cloud = wrist_camera.get_object_pointcloud(
+                    target_label,
+                    world_frame=True,
+                )
+                if len(object_cloud) < 32:
+                    raise RuntimeError(
+                        f"only {len(object_cloud)} instance-masked camera points found for {target_path}; "
+                        "move the wrist camera so the object is visible"
+                    )
+                grasp_cloud = sample_fixed(
+                    object_cloud,
+                    args.grasp_point_count,
+                    seed=args.grasp_seed,
+                )
+                grasp_dir = os.path.join(ROOT_DIR, "output", "graspgen")
+                os.makedirs(grasp_dir, exist_ok=True)
+                cloud_path = os.path.join(grasp_dir, "input_world.npy")
+                np.save(cloud_path, grasp_cloud)
+                print(
+                    f"[graspgen] target={target_path} instance={len(object_cloud)} "
+                    f"sent={len(grasp_cloud)}"
+                )
+                result = graspgen_client.infer(
+                    grasp_cloud,
+                    num_grasps=args.grasp_num_grasps,
+                    topk_num_grasps=args.grasp_topk,
+                    min_grasps=1,
+                    max_tries=1,
+                )
+                draw_pointcloud(grasp_cloud)
+                draw_grasps(
+                    result.grasps,
+                    result.confidences,
+                    max_grasps=args.grasp_topk,
+                )
+                if len(result.grasps):
+                    best = int(np.argmax(result.confidences))
+                    selection = None
+                    if args.execute_grasp:
+                        best, selection = select_executable_grasp(
+                            result.grasps,
+                            result.confidences,
+                            grasp_cloud,
+                            support_z=float(YCB_CONFIG["spawn"].get("support_z", 0.0)),
+                        )
+                    best_pose_path = os.path.join(grasp_dir, "best_grasp_world.npy")
+                    np.save(best_pose_path, result.grasps[best])
+                    print(
+                        f"[graspgen] returned={len(result.grasps)} "
+                        f"best_conf={result.confidences[best]:.4f} "
+                        f"infer_ms={result.infer_ms} saved={best_pose_path}"
+                    )
+                    if selection is not None:
+                        print(
+                            f"[grasp] selected index={best} "
+                            f"base_clearance={selection['base_clearance']:.4f} "
+                            f"approach_z={selection['approach_z']:.4f} "
+                            f"outward={selection['outward_approach']:.4f} "
+                            f"tool_distance={selection['tool_distance']:.4f}"
+                        )
+                    if args.execute_grasp:
+                        grasp_executor = GraspExecutor(ik, gripper)
+                        grasp_executor.start(result.grasps[best])
+                        grasp_phase = grasp_executor.phase
+                        print(f"[grasp] executing best grasp, phase: {grasp_phase}")
+                else:
+                    print(f"[graspgen] no grasp returned; input saved={cloud_path}")
+                graspgen_called = True
 
-        step += 1
-        if args.max_steps and step >= args.max_steps:
-            print(f"[main] max-steps({args.max_steps}) 도달 - 종료")
-            break
+            step += 1
+            if args.max_steps and step >= args.max_steps:
+                print_ycb_centers(ycb_paths)
+                print(f"[main] max-steps({args.max_steps}) 도달 - 종료")
+                break
+    finally:
+        if graspgen_client is not None:
+            graspgen_client.close()
 
     simulation_app.close()
 

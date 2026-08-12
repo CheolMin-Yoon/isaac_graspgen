@@ -1,71 +1,106 @@
 # Indy7 IK Design
 
-`source/isaac_indy7/indy7.py`의 `Indy7IK`가 indy7 IK 계약의 owner다. 로봇 자산/articulation
-facts는 [`indy7.md`](indy7.md)를 본다.
+`source/control/ik.py`의 `Indy7IK`가 Indy7 IK 계약의 owner다. 로봇
+USD/articulation facts는 [`indy7.md`](indy7.md)를 본다.
 
-## Why not Lula (`KinematicsSolver`)
+## 결정: Isaac Sim 공식 PINK 경로
 
-Isaac Sim 기본 로봇 중 일부는 번들된 Lula robot descriptor가 있어
-`KinematicsSolver`를 바로 쓸 수 있다. indy7은
-커스텀 authoring USD라 이 descriptor가 없다 — Lula 경로를 쓰려면 descriptor를
-직접 만들어야 하는데, 대신 URDF 없이도 동작하는 PINK(QP 기반 미분 IK,
-pinocchio)를 택했다.
+Indy7은 Isaac Sim에 번들된 Lula robot descriptor가 없으므로, 현재 IK backend는
+Isaac Sim 6.0.1의 공개 PINK API다.
 
-## How it works
+```python
+from isaacsim.robot_motion.pink import PinkIKController, load_pink_robot
+```
 
-`isaacsim.replicator.teleop.controllers.pink_ik.PinkIKController`를 감싼다.
-이 컨트롤러가 생성 시점에:
+구현은 Isaac Sim 공식 Franka PINK 예제의 계약을 그대로 따른다.
 
-1. 살아있는 스테이지에서 articulation 서브트리를 최소 URDF로 즉석
-   export한다 (`pink_urdf_export._export_urdf`, 임시 디렉토리에 씀 —
-   디스크에 영구 저장되는 URDF 파일은 없다).
-2. USD 조인트 이름(`joint0`)과 export된 URDF 조인트 이름
-   (`indy7_link0_joint0`처럼 로봇 prim 이름이 프리픽스로 붙음) 사이의
-   매핑을 자동으로 처리한다.
-3. pinocchio로 URDF를 로드해 QP(`osqp`) 기반 FrameTask + PostureTask로
-   IK를 푼다.
+1. 검증된 URDF를 `load_pink_robot()`으로 읽는다.
+2. 완전히 편 영점 자세 대신 굽힌 reach posture를 articulation position/target에
+   먼저 넣는다.
+3. 매 60 Hz control step마다 `RobotState`와 목표 `SpatialState`를 만들고
+   `PinkIKController.forward()`를 호출한다.
+4. solver가 반환한 arm joint position target만 live USD articulation에 적용한다.
 
-### EE 프레임 이름 모호성(gotcha)
+공식 예제의 controller 설정과 같은 값을 사용한다.
 
-Export된 URDF에는 같은 링크에 대해 **조인트 프레임**(`<root>_link6_tcp`,
-`tcp`라는 이름의 FixedJoint prim에서 옴)과 **링크(바디) 프레임**
-(`<root>_tcp`, `tcp`라는 이름의 Xform link prim에서 옴)이 둘 다 생긴다.
-`ee_link_name="tcp"`처럼 접미사만 주면 어느 쪽인지 모호(ambiguous)해서
-`_resolve_name_from_candidates`가 예외를 던진다. `Indy7IK.__init__`은 실제
-`ee_link`(RigidPrim)의 world 경로에서 로봇 root 이름을 뽑아
-`f"{robot_root_name}_{ee_link_name}"`로 정확한 이름을 만들어 넘긴다 —
-"tcp"만 넘기지 말 것.
+| 항목 | 값 |
+|---|---:|
+| solver | `osqp` |
+| control dt | `1/60 s` |
+| position cost | `5.0` |
+| orientation cost | `0.05` |
+| posture cost | `5e-3` |
+
+## 운동학 URDF와 live plant의 경계
+
+[`source/assets/indy7_v2/indy7_kinematics.urdf`](../../source/assets/indy7_v2/indy7_kinematics.urdf)는
+PINK/Pinocchio가 읽는 **운동학 전용 파일**이다. 링크 visual, collision, inertia와
+Robotiq 물리는 live combined USD가 소유한다.
+
+- URDF: `joint0`~`joint5`, `tcp` frame의 kinematic chain
+- USD: articulation, drive, collision, mass, Robotiq gripper, simulation state
+- PINK 출력: 앞 6개 arm DOF의 position target
+- gripper 출력: `Indy7Gripper`가 `finger_joint`를 별도로 제어
+
+URDF는 Isaac Sim 6.0.1의 공식 `isaacsim.asset.exporter.urdf` 결과에서 정확한
+joint origin/axis/limit을 가져왔다. Pinocchio parsing을 위해 effort limit을
+명시하고, link `tcp`와 중복되지 않도록 fixed joint 이름만 `tcp_joint`로 정규화했다.
+
+`Indy7IK` 초기화는 다음 두 검사를 통과하지 못하면 명령을 내리지 않는다.
+
+- URDF controlled joint names와 live USD 앞 6개 DOF 이름이 같은가
+- q=0에서 URDF `tcp` FK와 live USD `tcp` world pose가 일치하는가
+
+현재 q=0 TCP 기준값은 position `[-0.0, -0.2025, 1.2115] m`, orientation
+identity(wxyz)다.
+
+## 기존 구현이 실패한 원인
+
+PINK solver 자체의 문제가 아니었다. 이전 구현은
+`isaacsim.replicator.teleop` 내부의 임시 USD→URDF exporter와 내부 controller를
+사용했다. 그 exporter가 이 커스텀 Indy7 계층을 잘못 변환하여 q=0 TCP FK부터
+live USD와 크게 달랐다.
+
+```text
+live USD q=0 TCP      ≈ [ 0.0000, -0.2025,  1.2115]
+old temporary URDF   ≈ [-0.4900, -0.1300, -0.0270]
+official-export URDF ≈ [ 0.0000, -0.2025,  1.2115]
+```
+
+따라서 당시의 비수렴과 joint-limit 포화는 PINK의 한계가 아니라 서로 다른
+kinematic model로 계산한 명령을 plant에 적용한 결과다. teleop 내부 exporter는
+다시 사용하지 않는다.
 
 ## Interface
 
 ```python
-from isaac_indy7.indy7 import Indy7IK
+from control.ik import Indy7IK
 
-ik = Indy7IK(indy7)  # indy7: isaacsim.core.prims.SingleArticulation
-ik.go_to(position, orientation)   # orientation: wxyz (Isaac 규약). 매 스텝 호출
-ik.ee_pose()                      # 현재 EE (position, orientation wxyz)
-ik.ee_path                        # 현재 EE prim path. wrist camera parent로 사용
-ik.reset()                        # 타깃/필터 상태 초기화
+ik = Indy7IK(indy7)
+ik.go_to(position, orientation)  # position xyz[m], orientation Isaac wxyz
+ik.ee_pose()                     # live TCP world pose
+ik.ee_path                       # live TCP prim path
+ik.reset()                       # PINK state와 reach-posture seed 초기화
 ```
 
-- `go_to()`는 항상 wxyz(Isaac 규약)를 받아 내부에서 xyzw(pinocchio 규약)로
-  변환한다.
-- `num_arm_dofs`(기본 6)로 팔 관절만 제어하고, 뒤에 이어지는 그리퍼 DOF는
-  건드리지 않는다. 그리퍼 제어는 같은 모듈의 `Indy7Gripper`가 별도로 담당한다.
+`go_to()`는 one-shot IK가 아니라 reactive differential IK 한 step이다. 반환값은
+현재 live TCP가 목표 position 2 cm, orientation 0.15 rad 이내에 들어왔는지를
+뜻한다. 실제 실행 loop에서 매 control step 반복 호출해야 한다.
 
-## Lula와의 결정적 차이
+## 검증
 
-Lula(`KinematicsSolver.compute_inverse_kinematics`)는 **한 번의 호출로
-IK를 완전히 푼다**(analytic/numeric one-shot). PINK는 QP 기반 **리액티브
-(미분) IK**라 한 스텝에 목표로 완전히 수렴하지 않는다 — `go_to()`를 매
-물리 스텝마다 반복 호출해서 목표로 서서히 수렴시키는 용도다. 호출
-반환하는 "성공"의 의미가 다르다: Lula는 "이 포즈가 IK적으로 풀렸다",
-PINK(`Indy7IK`)는
-"이 스텝의 목표가 reachable 범위(거리 < 0.5m) 안에 있었다"이다.
+2026-08-12, 다음 live PhysX command를 실행했다.
 
-## Verified
+```bash
+./scripts/run_indy7.py --headless --max-steps 500 \
+  --target-position 0.45 0.0 0.45 \
+  --target-orientation 0 0 1 0
+```
 
-2026-07-12, 헤드리스 스모크 테스트: `indy7_v2.usd` 단독 스폰 후 목표
-`[0.3, 0.2, 0.6]`으로 60스텝 `go_to()` 반복 호출 → EE가
-`[0.0, -0.20, 1.21]`에서 `[0.70, -0.32, 0.64]`로 계속 이동(수렴 진행 중)
-확인. 예외 없이 동작.
+- step 120: TCP position `[0.4500, 0.0000, 0.4499]`, `reachable=True`
+- step 180: orientation이 목표 quaternion에 수렴
+- process exit code: `0`
+
+같은 backend로 GraspGen 실행 상태 머신도 pregrasp→approach→close→lift target까지
+추종했다. 다만 첫 tomato-can 시험에서는 물체 높이가 증가하지 않아 실제 grasp/lift는
+실패했다. 이는 현재 grasp 후보의 접촉 적합성 문제이며 IK 성공과 별도로 판정한다.

@@ -88,6 +88,10 @@ class WristCamera:
         elif self._capture_depth:
             self._camera.add_distance_to_image_plane_to_frame()
 
+        if self._cfg.get("enable_pointcloud", False):
+            pointcloud_camera = self._depth_camera if self._depth_camera is not None else self._camera
+            pointcloud_camera.add_instance_segmentation_to_frame()
+
         try:
             k_matrix = np.asarray(self._camera.get_intrinsics_matrix())
             np.savetxt(os.path.join(self._out_dir, "cam_K.txt"), k_matrix, fmt="%.18e")
@@ -133,6 +137,67 @@ class WristCamera:
     @property
     def prim_path(self) -> str:
         return self._prim_path
+
+    def get_pointcloud(self, *, world_frame: bool = True) -> np.ndarray:
+        """Deproject the current aligned depth image into finite XYZ points.
+
+        Point-cloud capture is opt-in through ``enable_pointcloud`` because its
+        annotator has a non-trivial render cost.
+        """
+        if not self._cfg.get("enable_pointcloud", False):
+            raise RuntimeError("camera point cloud is disabled; set enable_pointcloud=True")
+        pointcloud_camera = self._depth_camera if self._depth_camera is not None else self._camera
+        depth = pointcloud_camera.get_depth()
+        if depth is None:
+            return np.empty((0, 3), dtype=np.float32)
+        depth = np.asarray(depth, dtype=np.float32)
+        return self._deproject_mask(pointcloud_camera, depth, np.isfinite(depth) & (depth > 0.0), world_frame)
+
+    def get_object_pointcloud(self, label: str, *, world_frame: bool = True) -> np.ndarray:
+        """Return points selected by Isaac's oracle instance mask."""
+        if not self._cfg.get("enable_pointcloud", False):
+            raise RuntimeError("camera point cloud is disabled; set enable_pointcloud=True")
+
+        pointcloud_camera = self._depth_camera if self._depth_camera is not None else self._camera
+        segmentation = pointcloud_camera.get_current_frame().get("instance_segmentation")
+        if not isinstance(segmentation, dict):
+            raise RuntimeError("instance segmentation is not ready")
+
+        data = np.asarray(segmentation.get("data")).squeeze()
+        id_to_semantics = segmentation.get("info", {}).get("idToSemantics", {})
+        target_ids = []
+        for instance_id, semantics in id_to_semantics.items():
+            class_labels = str(semantics.get("class", "")).split(",")
+            if label in class_labels:
+                target_ids.append(int(instance_id))
+        if not target_ids:
+            available = sorted(str(value.get("class", "")) for value in id_to_semantics.values())
+            raise RuntimeError(f"instance label '{label}' is not visible; visible labels={available}")
+
+        depth = pointcloud_camera.get_depth()
+        if depth is None:
+            raise RuntimeError("depth image is not ready")
+        depth = np.asarray(depth, dtype=np.float32)
+        if data.shape != depth.shape:
+            raise RuntimeError(
+                f"depth/instance-mask shape mismatch: depth={depth.shape}, mask={data.shape}"
+            )
+        mask = np.isin(data, target_ids) & np.isfinite(depth) & (depth > 0.0)
+        return self._deproject_mask(pointcloud_camera, depth, mask, world_frame)
+
+    @staticmethod
+    def _deproject_mask(camera, depth: np.ndarray, mask: np.ndarray, world_frame: bool) -> np.ndarray:
+        rows, cols = np.nonzero(mask)
+        if len(rows) == 0:
+            return np.empty((0, 3), dtype=np.float32)
+        image_coords = np.column_stack((cols.astype(np.float32) + 0.5, rows.astype(np.float32) + 0.5))
+        depths = depth[rows, cols]
+        if world_frame:
+            points = camera.get_world_points_from_image_coords(image_coords, depths, device="cpu")
+        else:
+            points = camera.get_camera_points_from_image_coords(image_coords, depths, device="cpu")
+        xyz = np.asarray(points, dtype=np.float32)
+        return np.ascontiguousarray(xyz[np.isfinite(xyz).all(axis=1)])
 
     def set_as_active_viewport_camera(self) -> bool:
         """Show this camera in the active Isaac Sim viewport."""
