@@ -1,58 +1,60 @@
-"""Indy7 official Isaac PINK IK and gripper control."""
+"""Official Isaac PINK IK, driven by a ``RobotSpec``.
+
+The controller itself is arm-agnostic — everything that differs per arm (the
+kinematics model, the tool frame, the arm DOF count, the seed posture) comes in
+through the spec. The two startup checks below are the reason this stays one
+class instead of per-robot copies: they reject a kinematics model that has
+drifted from the USD before it can command the plant.
+"""
 
 from __future__ import annotations
-
-import os
 
 import numpy as np
 
 
-class Indy7IK:
-    """Official Isaac Sim PINK controller backed by a checked Indy7 URDF."""
+class PinkArmIK:
+    """Official Isaac Sim PINK controller backed by a checked URDF."""
 
-    def __init__(
-        self,
-        indy7,
-        ee_link_name: str = "tcp",
-        num_arm_dofs: int = 6,
-        dt: float = 1.0 / 60.0,
-    ) -> None:
+    def __init__(self, articulation, spec, dt: float = 1.0 / 60.0) -> None:
         import isaacsim.robot_motion.experimental.motion_generation as mg
         import pinocchio as pin
         import warp as wp
         from isaacsim.core.experimental.prims import Articulation
-        from isaacsim.robot_motion.pink import PinkIKController, load_pink_robot
+        from isaacsim.robot_motion.pink import PinkIKController
 
-        exp_robot = Articulation(indy7.prim_path)
+        ee_link_name = spec.ee_link_name
+        num_arm_dofs = spec.num_arm_dofs
+
+        exp_robot = Articulation(articulation.prim_path)
         link_names = list(exp_robot.link_names)
         ee_link_index = link_names.index(ee_link_name) if ee_link_name in link_names else 0
         link_paths = getattr(exp_robot, "link_paths", None)
-        ee_path = str(link_paths[0][ee_link_index]) if link_paths is not None else f"{indy7.prim_path}/{ee_link_name}"
-
-        kinematics_urdf = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            "assets",
-            "indy7_v2",
-            "indy7_kinematics.urdf",
+        ee_path = (
+            str(link_paths[0][ee_link_index])
+            if link_paths is not None
+            else f"{articulation.prim_path}/{ee_link_name}"
         )
-        pink_robot = load_pink_robot(kinematics_urdf)
-        if pink_robot.controlled_joint_names != list(indy7.dof_names[:num_arm_dofs]):
+
+        pink_robot = spec.make_pink_robot()
+        if pink_robot.controlled_joint_names != list(articulation.dof_names[:num_arm_dofs]):
             raise RuntimeError(
-                "Indy7 URDF/USD joint mismatch: "
-                f"urdf={pink_robot.controlled_joint_names}, usd={list(indy7.dof_names[:num_arm_dofs])}"
+                f"{spec.name} URDF/USD joint mismatch: "
+                f"urdf={pink_robot.controlled_joint_names}, "
+                f"usd={list(articulation.dof_names[:num_arm_dofs])}"
             )
 
         self._mg = mg
         self._wp = wp
         self._pin = pin
-        self._indy7 = indy7
+        self._spec = spec
+        self._articulation = articulation
         self._exp_robot = exp_robot
         self._num_arm_dofs = num_arm_dofs
         self._ee_path = ee_path
         self._link_names = link_names
         self._link_paths = link_paths
-        self._robot_prim_path = indy7.prim_path
-        self._robot_joint_space = list(indy7.dof_names)
+        self._robot_prim_path = articulation.prim_path
+        self._robot_joint_space = list(articulation.dof_names)
         self._robot_site_space = [ee_link_name]
         self._dt = float(dt)
         self._sim_time = 0.0
@@ -60,7 +62,12 @@ class Indy7IK:
         self._seed_applied = False
         # Same pattern as Isaac Sim's official Franka PINK example: start from
         # a bent, nonsingular reaching posture before reactive pose tracking.
-        self._reach_posture = np.array([0.0, 0.8, -1.6, 0.0, -0.8, 0.0], dtype=np.float32)
+        self._reach_posture = np.asarray(spec.reach_posture, dtype=np.float32)
+        if self._reach_posture.shape != (num_arm_dofs,):
+            raise ValueError(
+                f"{spec.name} reach_posture must have {num_arm_dofs} entries, "
+                f"got {self._reach_posture.shape}"
+            )
 
         self._controller = PinkIKController(
             pink_robot=pink_robot,
@@ -88,12 +95,12 @@ class Indy7IK:
             or 1.0 - abs(float(np.dot(model_tcp_wxyz, np.asarray(live_tcp_orientation)))) > 1e-4
         ):
             raise RuntimeError(
-                "Indy7 URDF/USD zero-pose FK mismatch: "
+                f"{spec.name} URDF/USD zero-pose FK mismatch: "
                 f"urdf_p={model_tcp.translation}, usd_p={live_tcp_position}"
             )
         print(
-            f"[ik] backend=isaac-pink ee={ee_link_name} dt={self._dt:.6f} "
-            f"urdf={kinematics_urdf}"
+            f"[ik] backend=isaac-pink robot={spec.name} ee={ee_link_name} "
+            f"dt={self._dt:.6f} kinematics={spec.kinematics_source}"
         )
 
     @property
@@ -177,78 +184,3 @@ class Indy7IK:
         from isaacsim.core.prims import SingleXFormPrim
 
         return SingleXFormPrim(self._ee_path).get_world_pose()
-
-
-class Indy7Gripper:
-    """Simple position control for the attached Robotiq-style finger joint."""
-
-    open_position = 0.0
-    closed_position = np.deg2rad(45.0)
-
-    def __init__(self, indy7, joint_name: str = "finger_joint") -> None:
-        self._indy7 = indy7
-        self._joint_name = joint_name
-        self._joint_index = self._find_joint_index(indy7.dof_names, joint_name)
-        if self._joint_index is None:
-            print(f"[gripper] joint '{joint_name}' not found; available={indy7.dof_names}")
-        else:
-            properties = indy7.dof_properties[self._joint_index]
-            self.closed_position = float(properties["upper"])
-            print(
-                f"[gripper] joint '{joint_name}' @ index {self._joint_index} "
-                f"limits=[{properties['lower']:.4f}, {properties['upper']:.4f}] "
-                f"stiffness={properties['stiffness']:.3f} damping={properties['damping']:.3f} "
-                f"max_effort={properties['maxEffort']:.3f}"
-            )
-
-    @staticmethod
-    def _find_joint_index(dof_names: list[str], joint_name: str) -> int | None:
-        if joint_name in dof_names:
-            return dof_names.index(joint_name)
-        return None
-
-    @property
-    def available(self) -> bool:
-        return self._joint_index is not None
-
-    def open(self) -> None:
-        self.set(self.open_position)
-
-    def close(self) -> None:
-        self.set(self.closed_position)
-
-    def set(self, target: float) -> None:
-        if self._joint_index is None:
-            return
-        from isaacsim.core.utils.types import ArticulationAction
-
-        self._indy7.apply_action(
-            ArticulationAction(
-                joint_positions=[float(target)],
-                joint_indices=[self._joint_index],
-            )
-        )
-
-    @property
-    def hold_position(self) -> float:
-        if self._joint_index is None:
-            return self.open_position
-        positions = self._indy7.get_joint_positions()
-        return float(positions[self._joint_index])
-
-    @property
-    def target_position(self) -> float:
-        """Return the currently applied articulation position target."""
-        if self._joint_index is None:
-            return self.open_position
-        action = self._indy7.get_applied_action()
-        return float(action.joint_positions[self._joint_index])
-
-    @property
-    def measured_effort(self) -> float:
-        if self._joint_index is None:
-            return 0.0
-        return float(self._indy7.get_measured_joint_efforts([self._joint_index])[0])
-
-    def hold(self, target: float | None = None) -> None:
-        self.set(self.hold_position if target is None else target)

@@ -5,15 +5,18 @@ from __future__ import annotations
 import numpy as np
 
 
-def spawn_indy7(usd_path: str, prim_path: str, position):
-    """Add an Indy7 USD reference and wrap it as a SingleArticulation.
+def spawn(spec):
+    """Add the Indy7 USD reference and wrap it as a SingleArticulation.
 
     The combined asset USDs (gripper/camera variants) nest the actual
     ArticulationRootAPI prim one or more levels below their defaultPrim, so
-    ``prim_path`` itself is never the articulation root after referencing —
-    the root is found by scanning the referenced subtree instead of assuming
-    it sits exactly at ``prim_path``.
+    ``spec.prim_path`` itself is never the articulation root after referencing
+    — the root is found by scanning the referenced subtree instead of assuming
+    it sits exactly at ``spec.prim_path``.
     """
+    usd_path = spec.usd_path
+    prim_path = spec.prim_path
+
     import omni.usd
     from pxr import PhysxSchema, Sdf, Usd, UsdGeom, UsdPhysics
 
@@ -113,6 +116,6 @@ def spawn_indy7(usd_path: str, prim_path: str, position):
 
     return SingleArticulation(
         prim_path=str(articulation_prim.GetPath()),
-        name="indy7",
-        position=np.asarray(position, dtype=float),
+        name=spec.name,
+        position=np.asarray(spec.position, dtype=float),
     )

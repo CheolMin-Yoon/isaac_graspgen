@@ -1,10 +1,10 @@
 """Grasp execution parameters.
 
-GraspGen returns world-frame 4x4 gripper poses following the Robotiq 2F-140
-convention used at training time: +z is the approach direction and the origin
-sits at the gripper base frame. If grasps look offset along the approach axis,
-tune TCP_OFFSET first — it maps the GraspGen gripper frame onto the Indy7 TCP
-frame used by ``control.ik.Indy7IK``.
+GraspGen returns world-frame 4x4 gripper poses following the convention used
+at training time: +z is the approach direction and the origin sits at the
+gripper base frame. If grasps look offset along the approach axis, tune
+TCP_OFFSET first — it maps the GraspGen gripper frame onto the arm's TCP frame
+tracked by ``robots.arm_ik.PinkArmIK``.
 """
 
 from __future__ import annotations

@@ -12,14 +12,17 @@ def select_executable_grasp(
     confidences: np.ndarray,
     object_points: np.ndarray,
     *,
+    gripper_depth: float,
     support_z: float = 0.0,
 ) -> tuple[int, dict[str, float]]:
     """Choose the highest-confidence table-safe, top-down-ish grasp.
 
-    GraspGen poses locate the Robotiq base, not its finger center.  The tool
-    center used for the object-distance check is therefore ``base + depth*z``.
-    This is only a cheap execution prefilter; collision and IK checks remain
-    future gates.
+    GraspGen poses locate the gripper base, not its finger center.  The tool
+    center used for the object-distance check is therefore
+    ``base + gripper_depth*z``, so ``gripper_depth`` must come from the
+    GripperSpec actually mounted — passing the wrong gripper's depth silently
+    shifts every distance gate.  This is only a cheap execution prefilter;
+    collision and IK checks remain future gates.
     """
     poses = np.asarray(grasps, dtype=float).reshape(-1, 4, 4)
     scores = np.asarray(confidences, dtype=float).reshape(-1)
@@ -39,7 +42,7 @@ def select_executable_grasp(
         pose = poses[index]
         base = pose[:3, 3]
         approach = pose[:3, 2]
-        tool_center = base + config.GRIPPER_DEPTH * approach
+        tool_center = base + gripper_depth * approach
         tool_distance = float(np.linalg.norm(tool_center - object_center))
         base_clearance = float(base[2] - support_z)
         approach_z = float(approach[2])

@@ -4,10 +4,10 @@
 
 ## 목표와 경계
 
-이 작업의 목표는 `isaac_indy7`만 수정하여 기존 GraspGen을 inference backend로
+이 작업의 목표는 `isaac_graspgen`만 수정하여 기존 GraspGen을 inference backend로
 연결하는 것이다.
 
-- 수정하는 저장소: `/home/frlab/isaac_indy7`
+- 수정하는 저장소: `/home/frlab/isaac_graspgen`
 - 수정하지 않는 저장소: `/home/frlab/GraspGen`, `/home/frlab/better_pcd`,
   `/home/frlab/IsaacLab`
 - GraspGen은 별도 Conda/CUDA 환경에서 ZMQ server로 실행한다.
@@ -19,7 +19,7 @@
   lift 성공까지 검증된 상태는 아니다.
 
 ```text
-Isaac Sim 6.0.1 / isaac_indy7
+Isaac Sim 6.0.1 / isaac_graspgen
   wrist depth camera
         ↓ world point cloud
   target instance mask + aligned depth deprojection
@@ -81,7 +81,7 @@ kinematic으로 스폰되며, 실행 대상으로 선택된 object 하나만 app
 진입 시 dynamic으로 해제된다. close까지 kinematic을 유지하면 finger overlap
 해소 impulse로 물체가 옆으로 밀릴 수 있어 release 시점을 앞당겼다.
 
-### `indy7.py`
+### `grasp_scene.py`
 
 `--graspgen` 실행 경로를 추가했다.
 
@@ -128,7 +128,7 @@ msgpack-numpy==0.4.8
 재설치는 다음 명령으로 가능하다.
 
 ```bash
-cd /home/frlab/isaac_indy7
+cd /home/frlab/isaac_graspgen
 ./scripts/install_graspgen_client_deps.py
 ```
 
@@ -147,15 +147,15 @@ Discriminator: graspgen_robotiq_2f_140_dis.pth
 터미널 1:
 
 ```bash
-cd /home/frlab/isaac_indy7
+cd /home/frlab/isaac_graspgen
 ./scripts/run_graspgen_server.py
 ```
 
 터미널 2:
 
 ```bash
-cd /home/frlab/isaac_indy7
-./scripts/run_indy7.py \
+cd /home/frlab/isaac_graspgen
+./scripts/run_scene.py \
   --graspgen \
   --target-position 0.45 0.0 0.45 \
   --grasp-object-index 0 \
@@ -199,7 +199,7 @@ best confidence: 약 0.9411
 다음 smoke command로 end-to-end 요청까지 성공했다.
 
 ```bash
-./scripts/run_indy7.py \
+./scripts/run_scene.py \
   --headless \
   --target-position 0.45 0.0 0.45 \
   --graspgen \
@@ -258,6 +258,6 @@ output/graspgen/best_grasp_world.npy
    검증한다.
 3. 실제 lift 성공 후 `better_pcd`를 수정하지 않는 별도 PoinTr-EDL
    service/client bridge를
-   `isaac_indy7`에 추가한다.
+   `isaac_graspgen`에 추가한다.
 4. 최종적으로 partial → completion/uncertainty → GraspGen → uncertainty-aware
    selection → pick/place state machine 순서로 확장한다.

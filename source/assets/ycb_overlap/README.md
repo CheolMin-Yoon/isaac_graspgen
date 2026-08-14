@@ -15,6 +15,6 @@ Z-up USD로 변환한다. Rigid-body mass와 convex-hull collision은
 재생성:
 
 ```bash
-cd /home/frlab/isaac_indy7
+cd /home/frlab/isaac_graspgen
 ~/isaacsim/python.sh scripts/prepare_ycb_overlap_assets.py --force
 ```

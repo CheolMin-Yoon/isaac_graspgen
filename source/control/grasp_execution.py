@@ -1,10 +1,13 @@
 """Execute a GraspGen world-frame grasp pose with differential IK.
 
 Phase machine: pregrasp -> approach -> close -> lift -> done. Each phase
-tracks one TCP target with ``control.ik.Indy7IK`` and advances after the TCP
-stays within ``config.POSITION_TOL`` for ``config.SETTLE_STEPS`` steps.
+tracks one TCP target with ``robots.arm_ik.PinkArmIK`` and advances after the
+TCP stays within ``config.POSITION_TOL`` for ``config.SETTLE_STEPS`` steps.
 
-Example wiring (see the repo-root ``indy7.py`` entrypoint):
+The executor is robot-agnostic: it only needs an object with ``go_to`` and
+``ee_pose`` plus a gripper with ``open``/``close``.
+
+Example wiring (see the repo-root ``grasp_scene.py`` entrypoint):
 
     executor = GraspExecutor(ik, gripper)
     executor.start(result.grasps[int(np.argmax(result.confidences))])

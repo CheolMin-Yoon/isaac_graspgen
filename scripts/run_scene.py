@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Launch the Indy7 scene inside Isaac Sim.
+"""Launch the grasp scene inside Isaac Sim.
 
 Usage:
-    ./scripts/run_indy7.py [indy7.py args...]
-    ./scripts/run_indy7.py --graspgen --execute-grasp
+    ./scripts/run_scene.py [grasp_scene.py args...]
+    ./scripts/run_scene.py --robot indy7 --graspgen --execute-grasp
 
 Sets up the ROS2 environment expected by isaacsim.ros2.bridge, then replaces
-itself with Isaac Sim's python running the repo-root ``indy7.py``. The default
-Kit options cap the app at 60 Hz, limit CPU worker pools to 8 threads, and use
-one GPU. A matching option supplied by the user later on the command line wins.
+itself with Isaac Sim's python running the repo-root ``grasp_scene.py``. The
+default Kit options cap the app at 60 Hz, limit CPU worker pools to 8 threads,
+and use one GPU. A matching option supplied by the user later on the command
+line wins.
 """
 
 from __future__ import annotations
@@ -29,12 +30,12 @@ DEFAULT_KIT_ARGS = [
 
 def main() -> None:
     env = dict(os.environ)
-    env.setdefault("ISAAC_INDY7_CPU_THREADS", DEFAULT_CPU_THREADS)
+    env.setdefault("ISAAC_GRASPGEN_CPU_THREADS", DEFAULT_CPU_THREADS)
     env["ROS_DISTRO"] = "jazzy"
     env["RMW_IMPLEMENTATION"] = "rmw_fastrtps_cpp"
     prior = env.get("LD_LIBRARY_PATH")
     env["LD_LIBRARY_PATH"] = f"{prior}:{ISAACSIM_ROS2_LIB}" if prior else ISAACSIM_ROS2_LIB
-    cpu_threads = env["ISAAC_INDY7_CPU_THREADS"]
+    cpu_threads = env["ISAAC_GRASPGEN_CPU_THREADS"]
     env["PXR_WORK_THREAD_LIMIT"] = cpu_threads
     env["OPENBLAS_NUM_THREADS"] = cpu_threads
     env["OMP_NUM_THREADS"] = cpu_threads
@@ -46,7 +47,7 @@ def main() -> None:
     ]
 
     launcher = os.path.join(ISAACSIM_ROOT, "python.sh")
-    entry = os.path.join(PROJECT_ROOT, "indy7.py")
+    entry = os.path.join(PROJECT_ROOT, "grasp_scene.py")
     os.execve(launcher, [launcher, entry, *kit_args, *sys.argv[1:]], env)
 
 

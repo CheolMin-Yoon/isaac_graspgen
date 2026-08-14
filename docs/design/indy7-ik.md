@@ -1,7 +1,9 @@
 # Indy7 IK Design
 
-`source/control/ik.py`의 `Indy7IK`가 Indy7 IK 계약의 owner다. 로봇
-USD/articulation facts는 [`indy7.md`](indy7.md)를 본다.
+`source/robots/arm_ik.py`의 `PinkArmIK`가 IK 계약의 owner이고, Indy7 고유 값은
+`source/robots/indy7/__init__.py`의 `SPEC`(`make_pink_robot`,
+`kinematics_source`, `ee_link_name`, `num_arm_dofs`, `reach_posture`)이 준다.
+로봇 USD/articulation facts는 [`indy7.md`](indy7.md)를 본다.
 
 ## 결정: Isaac Sim 공식 PINK 경로
 
@@ -14,7 +16,9 @@ from isaacsim.robot_motion.pink import PinkIKController, load_pink_robot
 
 구현은 Isaac Sim 공식 Franka PINK 예제의 계약을 그대로 따른다.
 
-1. 검증된 URDF를 `load_pink_robot()`으로 읽는다.
+1. 검증된 URDF를 `load_pink_robot()`으로 읽는다. 이 호출은 `PinkArmIK`가 아니라
+   `SPEC.make_pink_robot`(즉 `robots/indy7/__init__.py`)에 있다 — Isaac이 번들로
+   가진 팔은 대신 `load_pink_supported_robot()`을 쓰기 때문이다(`franka`, `ur10`).
 2. 완전히 편 영점 자세 대신 굽힌 reach posture를 articulation position/target에
    먼저 넣는다.
 3. 매 60 Hz control step마다 `RobotState`와 목표 `SpatialState`를 만들고
@@ -33,20 +37,20 @@ from isaacsim.robot_motion.pink import PinkIKController, load_pink_robot
 
 ## 운동학 URDF와 live plant의 경계
 
-[`source/assets/indy7_v2/indy7_kinematics.urdf`](../../source/assets/indy7_v2/indy7_kinematics.urdf)는
+[`source/robots/indy7/assets/indy7_kinematics.urdf`](../../source/robots/indy7/assets/indy7_kinematics.urdf)는
 PINK/Pinocchio가 읽는 **운동학 전용 파일**이다. 링크 visual, collision, inertia와
 Robotiq 물리는 live combined USD가 소유한다.
 
 - URDF: `joint0`~`joint5`, `tcp` frame의 kinematic chain
 - USD: articulation, drive, collision, mass, Robotiq gripper, simulation state
 - PINK 출력: 앞 6개 arm DOF의 position target
-- gripper 출력: `Indy7Gripper`가 `finger_joint`를 별도로 제어
+- gripper 출력: `SingleJointGripper`가 `finger_joint`를 별도로 제어
 
 URDF는 Isaac Sim 6.0.1의 공식 `isaacsim.asset.exporter.urdf` 결과에서 정확한
 joint origin/axis/limit을 가져왔다. Pinocchio parsing을 위해 effort limit을
 명시하고, link `tcp`와 중복되지 않도록 fixed joint 이름만 `tcp_joint`로 정규화했다.
 
-`Indy7IK` 초기화는 다음 두 검사를 통과하지 못하면 명령을 내리지 않는다.
+`PinkArmIK` 초기화는 다음 두 검사를 통과하지 못하면 명령을 내리지 않는다.
 
 - URDF controlled joint names와 live USD 앞 6개 DOF 이름이 같은가
 - q=0에서 URDF `tcp` FK와 live USD `tcp` world pose가 일치하는가
@@ -74,9 +78,9 @@ kinematic model로 계산한 명령을 plant에 적용한 결과다. teleop 내�
 ## Interface
 
 ```python
-from control.ik import Indy7IK
+from robots.arm_ik import PinkArmIK
 
-ik = Indy7IK(indy7)
+ik = PinkArmIK(articulation, spec, dt=control_dt)
 ik.go_to(position, orientation)  # position xyz[m], orientation Isaac wxyz
 ik.ee_pose()                     # live TCP world pose
 ik.ee_path                       # live TCP prim path
@@ -92,7 +96,7 @@ ik.reset()                       # PINK state와 reach-posture seed 초기화
 2026-08-12, 다음 live PhysX command를 실행했다.
 
 ```bash
-./scripts/run_indy7.py --headless --max-steps 500 \
+./scripts/run_scene.py --headless --max-steps 500 \
   --target-position 0.45 0.0 0.45 \
   --target-orientation 0 0 1 0
 ```

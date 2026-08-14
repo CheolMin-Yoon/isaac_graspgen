@@ -18,6 +18,8 @@ from graspgen.pointcloud import crop_aabb, sample_fixed
 from graspgen.selection import select_executable_grasp
 from graspgen.visualization import grasp_axis_lines
 from control.grasp_execution import GraspExecutor
+from robots import available_robots, get_robot
+from robots.gripper import ROBOTIQ_2F_140
 from sim.config import CONTROL_HZ, PHYSICS_HZ, RENDERING_HZ
 
 
@@ -74,15 +76,16 @@ def test_grasp_executor_reaches_lift_done() -> None:
 
 
 def test_execution_selection_rejects_table_colliding_best_grasp() -> None:
+    depth = ROBOTIQ_2F_140.graspgen_depth
     points = np.array([[0.40, 0.0, 0.02], [0.41, 0.0, 0.02]], dtype=np.float32)
     poses = np.repeat(np.eye(4)[None], 2, axis=0)
     # Higher confidence, but the gripper base is below the clearance gate.
     poses[0, :3, 2] = [0.0, 0.0, -1.0]
-    poses[0, :3, 3] = [0.405, 0.0, 0.05 + 0.195]
+    poses[0, :3, 3] = [0.405, 0.0, 0.05 + depth]
     # Lower confidence and executable from above.
     approach = np.array([0.6, 0.0, -0.8])
     poses[1, :3, 2] = approach
-    poses[1, :3, 3] = points.mean(axis=0) - 0.195 * approach
+    poses[1, :3, 3] = points.mean(axis=0) - depth * approach
     # Make candidate 0 genuinely invalid after constructing its tool point.
     poses[0, 2, 3] = 0.05
 
@@ -90,11 +93,35 @@ def test_execution_selection_rejects_table_colliding_best_grasp() -> None:
         poses,
         np.array([0.99, 0.80]),
         points,
+        gripper_depth=depth,
     )
 
     assert index == 1
     assert metrics["approach_z"] == -0.8
     assert metrics["outward_approach"] == 0.6
+
+
+def test_robot_registry_exposes_indy7_spec() -> None:
+    assert "indy7" in available_robots()
+
+    spec = get_robot("indy7")
+    assert spec.name == "indy7"
+    assert len(spec.reach_posture) == spec.num_arm_dofs
+    assert spec.gripper is ROBOTIQ_2F_140
+    # The specs carry paths, so a moved asset shows up here rather than three
+    # minutes into an Isaac Sim launch. Indy7's kinematics is a repo-authored
+    # URDF, so kinematics_source is a real path for this arm.
+    assert os.path.isfile(spec.usd_path), spec.usd_path
+    assert os.path.isfile(spec.kinematics_source), spec.kinematics_source
+
+
+def test_unknown_robot_names_the_available_ones() -> None:
+    try:
+        get_robot("panda")
+    except KeyError as error:
+        assert "indy7" in str(error)
+    else:
+        raise AssertionError("get_robot('panda') should raise until panda is implemented")
 
 
 def test_pointcloud_preparation() -> None:

@@ -1,20 +1,14 @@
-"""Scene configuration: robot asset, YCB objects, wrist camera, timing."""
+"""Scene configuration: YCB objects, wrist camera, timing.
+
+Robot-specific settings (USD, prim path, base pose, kinematics) live in
+``robots/<name>``, not here — this module describes the world the arm works in.
+"""
 
 from __future__ import annotations
 
 import os
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-INDY7_USD = os.path.join(
-    PROJECT_ROOT,
-    "source",
-    "assets",
-    "indy7_v2",
-    "indy7_v2_with_2f-140_d455.usd",
-)
-INDY7_PRIM_PATH = "/World/indy7"
-INDY7_POSITION = [0.0, 0.0, 0.0]
 
 YCB_CONFIG = {
     "objects": [
@@ -82,12 +76,19 @@ YCB_CONFIG = {
         "clearance": 0.0,
         "scale": 1.0,
     },
+    # A convex hull seals concave geometry shut — the bowl becomes a solid dome
+    # and rolls onto its side. Measured over 300 dynamic steps, hull vs
+    # decomposition (both with the up-axis correction applied) is 3 objects
+    # tipped vs 0. NVIDIA's own Axis_Aligned_Physics mustard bottle ships
+    # convexDecomposition for the same reason.
+    "collision": "convexDecomposition",
     "seed": 0,
 }
 
 CAMERA_CONFIG = {
-    # d455 mount + rsd455.usd reference are already baked into INDY7_USD at
-    # link6/d455 — WristCamera only re-poses the mount and wraps it.
+    # The d455 mount and its rsd455.usd reference are already baked into the
+    # robot USD under ``spec.wrist_camera_link`` — WristCamera only re-poses
+    # the mount and wraps it.
     "prim_name": "d455",
     "asset_root_name": "RSD455",
     "color_camera": "Camera_OmniVision_OV9782_Color",

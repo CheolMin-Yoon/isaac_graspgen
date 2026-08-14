@@ -1,11 +1,11 @@
 # Indy7 Asset Design
 
-`source/assets/indy7_v2/`가 indy7 로봇 USD 계약의 owner다. articulation/솔버 파라미터
+`source/robots/indy7/assets/`가 indy7 로봇 USD 계약의 owner다. articulation/솔버 파라미터
 facts는 이 문서가 정본이며, IK 쪽 계약은 [`indy7-ik.md`](indy7-ik.md)를 본다.
 
 ## Files
 
-### `source/assets/indy7_v2/indy7_v2.usd`
+### `source/robots/indy7/assets/indy7_v2.usd`
 
 indy7 6축 팔 단독 USD. Owner of:
 
@@ -16,7 +16,7 @@ indy7 6축 팔 단독 USD. Owner of:
   `dof_names`는 `["joint0", ..., "joint5"]` 6개.
 - 소스 USD의 authored articulation 값은 `self-collision=true`, solver `32/4`다.
   이 값은 폐루프 Robotiq에 안전하지 않으므로 실행 계약이 아니다.
-- 실제 plant 계약은 `source/sim/spawn.py`가 최종 composed articulation root에
+- 실제 plant 계약은 `source/robots/indy7/spawn.py`가 최종 composed articulation root에
   `self-collision=false`, solver `16/1`로 override한다. child/base USD 중 하나만
   보고 런타임 값을 추론하지 않는다.
   - `drive:angular:physics:stiffness = 10000`, `damping = 100`,
@@ -47,7 +47,7 @@ Robot Assembler로 만든 결합 스테이지. **`indy7_v2.usd`를 상대 payloa
 - 바이너리 결합본의 기존 `/Robotiq_2F_140_config`는 Z-axis 관절에
   `rotX` mimic 관계 하나만 남은 혼합 구성이다. open target 0을 주어도
   master joint가 약 `0.7854 rad`에 머물러 실행 시 비활성화한다.
-- `source/sim/spawn.py`가 Isaac Sim 6.0.1 공식 UR10e gripper 예제의
+- `source/robots/indy7/spawn.py`가 Isaac Sim 6.0.1 공식 UR10e gripper 예제의
   `/ur/ee_link` subtree를 참조한다. 이 configured graph는 X-axis 관절과
   `finger_joint`를 참조하는 5개 `PhysxMimicJointAPI:rotX`를 갖는다.
 - 공식 subtree의 기존 UR10 fixed joint를 비활성화하고, 공식 Robot
@@ -55,7 +55,7 @@ Robot Assembler로 만든 결합 스테이지. **`indy7_v2.usd`를 상대 payloa
   `robotiq_arg2f_base_link`를 용접한다. 정렬 오차는 `0`이다.
 - 최종 articulation `dof_names`는 `joint0..joint5` 뒤에 mimic master
   `finger_joint`가 이어진 7개다.
-- 런타임 그리퍼 명령은 `source/control/ik.py::Indy7Gripper`가 소유한다.
+- 런타임 그리퍼 명령은 `source/robots/gripper.py::SingleJointGripper`가 소유한다.
   `open=0`, `close=runtime upper limit=0.7 rad`이다.
 
 #### Play 시 폭발과 self-collision 계약

@@ -12,18 +12,28 @@ GraspGen ZMQ 연결의 구현 범위, 실행법, 실제 검증 결과와 현재 
 - Runtime: Isaac Sim standalone 6.0.1 (`~/isaacsim`)뿐이다. **Isaac Lab은
   필요 없다** — manager-based task/gym 등록 없이 `isaacsim.core` API를
   직접 조립해서 쓴다.
-- 워크스페이스명은 `isaac_indy7`로 확정(이전 `isaac_gnn`에서 리네임, 2026-07-12).
-  동명의 내부 파이썬 패키지는 2026-08-12에 `sim/`·`control/`·`graspgen/`으로 분해됐다.
-  현재 워크스페이스는 Indy7 단일 경로 — 스폰/IK/그리퍼/YCB/카메라 단계다.
-- 루트 실행 파일은 `indy7.py` 하나, 실행은 `scripts/*.py` 파이썬 런처로 한다.
-  재사용 코드는 `source/` 밑 주제별 패키지(`sim/`=스폰·카메라·ros2,
-  `control/`=IK·grasp 실행, `graspgen/`=클라이언트·전처리·시각화 —
-  mj_rl/mj_deploy와 같은 구조), 각 패키지 설정은 자기 `config.py`,
-  USD 자산은 `source/assets/` 아래에 둔다.
-- Repo: https://github.com/CheolMin-Yoon/isaac_indy7
+- 워크스페이스명은 `isaac_graspgen`으로 확정(2026-08-15 리네임; 이전 이름
+  `isaac_indy7`, 그 전 `isaac_gnn`). 동명의 내부 파이썬 패키지는 2026-08-12에
+  `sim/`·`control/`·`graspgen/`으로 분해됐고, 2026-08-15에 로봇 종속 코드가
+  `robots/`로 다시 분리됐다.
+- **방향 전환(2026-08-15): 이 워크스페이스는 더 이상 Indy7 전용이 아니다.**
+  이전 handoff는 "isaac_indy7는 Indy7 전용으로 유지한다"고 적었으나, Panda를
+  같은 워크스페이스에서 다루기로 하면서 뒤집혔다. 팔은 `--robot`으로 고르고,
+  로봇 종속 사실은 `source/robots/<name>/`의 `SPEC`(`RobotSpec`)에 모은다.
+  현재 등록된 로봇은 `indy7` 하나이고 `panda`는 미구현이다 — 추가 절차와
+  아직 추상화되지 않은 부분은 `source/robots/panda/README.md`에 적어뒀다.
+- 루트 실행 파일은 `grasp_scene.py` 하나, 실행은 `scripts/*.py` 파이썬 런처로
+  한다. 재사용 코드는 `source/` 밑 주제별 패키지(`robots/`=로봇 레지스트리·IK·
+  그리퍼·로봇 자산, `sim/`=YCB·카메라·ros2, `control/`=grasp 실행,
+  `graspgen/`=클라이언트·전처리·시각화 — mj_rl/mj_deploy와 같은 구조),
+  각 패키지 설정은 자기 `config.py`, 씬 USD 자산은 `source/assets/`,
+  로봇 USD 자산은 `source/robots/<name>/assets/` 아래에 둔다.
+- Repo: https://github.com/CheolMin-Yoon/isaac_graspgen
+- 업스트림 NVIDIA GraspGen 체크아웃(`/home/frlab/GraspGen`)은 이 워크스페이스와
+  다른 저장소다. 이름이 비슷해졌으니 경로를 혼동하지 않는다 — 둘은 ZMQ로만
+  통신하고, 서버 경로는 `source/graspgen/config.py`의 `SERVER_ROOT`에 있다.
 - FFW(AI Worker BG2/SG2/SH5) USD들은 이 워크스페이스 소속이 아니다 —
   `~/gs_rl/source/assets/ffw/`로 옮겨졌다(Genesis 기반 워크스페이스, 2026-07-12).
-  isaac_indy7는 Indy7 전용으로 유지한다.
 
 ## 완료된 기반
 
@@ -34,14 +44,20 @@ GraspGen ZMQ 연결의 구현 범위, 실행법, 실제 검증 결과와 현재 
   `finger_joint`는 `open=0`, `close=runtime upper limit=0.7 rad`다. open은 step
   0/60에서 `q=0`, close는 step 60에서 `q=0.7`임을 확인했다. 계약/자산 facts:
   `docs/design/indy7.md`.
-- **Indy7 + YCB + IK 엔트리포인트**: 루트 `indy7.py`가 로봇/YCB 스폰,
+- **로봇 레지스트리 분리(2026-08-15)**: 로봇 종속 사실을 `RobotSpec`
+  (`source/robots/base.py`)으로 모으고, `sim/`·`control/`·`graspgen/`은 어떤
+  팔인지 모르게 만들었다. `Indy7IK`→`PinkArmIK`(spec 주입), `Indy7Gripper`→
+  `SingleJointGripper`(GripperSpec 주입), `spawn_indy7`→`robots.indy7.spawn`.
+  GraspGen 체크포인트는 팔이 아니라 그리퍼에 붙는다(`ROBOTIQ_2F_140`).
+  Isaac 없이 도는 pytest 8개가 통과하지만 **Isaac Sim 실행 재검증은 아직이다.**
+- **Indy7 + YCB + IK 엔트리포인트**: 루트 `grasp_scene.py`가 로봇/YCB 스폰,
   선택적 목표 pose 추종(`--target-position`, `--target-orientation`),
   선택적 그리퍼 명령(`--gripper open|close|hold`)을 담당한다. 기본은 open이다.
   YCB object는 관찰 중 kinematic으로 고정되고, 선택된 target 하나만 approach 진입
   시 dynamic으로 해제된다. no-action 180-step에서 초기 pose가 유지됐다.
 - **공식 PINK 경로 검증**: teleop 내부 USD→URDF exporter를 제거하고
   `isaacsim.robot_motion.pink` 공개 API + 검증된
-  `source/assets/indy7_v2/indy7_kinematics.urdf`로 교체했다. q=0 URDF/USD
+  `source/robots/indy7/assets/indy7_kinematics.urdf`로 교체했다. q=0 URDF/USD
   TCP FK가 일치하며 `[0.45, 0.0, 0.45]`, quaternion `[0, 0, 1, 0]`에
   live PhysX TCP가 수렴했다.
 - **GraspGen 실행 경계**: instance mask→GraspGen→geometry gate→PINK
@@ -72,5 +88,6 @@ GraspGen ZMQ 연결의 구현 범위, 실행법, 실제 검증 결과와 현재 
 - 실행 명령/옵션: `README.md`
 - indy7 USD/articulation 계약: `docs/design/indy7.md`
 - indy7 PINK IK 계약: `docs/design/indy7-ik.md`
+- 팔 추가 절차와 아직 Indy7 모양인 부분: `source/robots/panda/README.md`
 - Isaac Sim 툴링 관련 재발 방지 노트:
   research-wiki `AI-Sessions/wiki/harness/errors/isaacsim-errors.md`

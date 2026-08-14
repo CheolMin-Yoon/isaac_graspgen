@@ -1,10 +1,15 @@
-"""Indy7 scene entrypoint.
+"""Grasp scene entrypoint.
+
+The arm is selected with ``--robot``; everything else in this file is scene
+logic that does not know which arm it is driving. See
+``source/robots/__init__.py`` for the registry.
 
 Examples:
-    ~/isaacsim/python.sh indy7.py
-    ~/isaacsim/python.sh indy7.py --target-position 0.45 0.0 0.35
-    ~/isaacsim/python.sh indy7.py --target-position 0.45 0.0 0.35 --target-orientation 0 0 1 0
-    ~/isaacsim/python.sh indy7.py --gripper close
+    ~/isaacsim/python.sh grasp_scene.py
+    ~/isaacsim/python.sh grasp_scene.py --robot indy7
+    ~/isaacsim/python.sh grasp_scene.py --target-position 0.45 0.0 0.35
+    ~/isaacsim/python.sh grasp_scene.py --target-position 0.45 0.0 0.35 --target-orientation 0 0 1 0
+    ~/isaacsim/python.sh grasp_scene.py --gripper close
 """
 
 from __future__ import annotations
@@ -21,12 +26,10 @@ if SOURCE_DIR not in sys.path:
     sys.path.insert(0, SOURCE_DIR)
 
 from graspgen import config as graspgen_config
+from robots import available_robots, get_robot
 from sim.config import (
     CAMERA_CONFIG,
     CONTROL_HZ,
-    INDY7_POSITION,
-    INDY7_PRIM_PATH,
-    INDY7_USD,
     PHYSICS_HZ,
     PHYSICS_DT,
     RENDERING_HZ,
@@ -37,7 +40,25 @@ from sim.config import (
 from isaacsim import SimulationApp
 
 parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--robot",
+    default="indy7",
+    choices=available_robots(),
+    help="구동할 로봇 (source/robots 레지스트리)",
+)
 parser.add_argument("--headless", action="store_true", help="GUI 없이 실행")
+parser.add_argument(
+    "--ycb-dynamic",
+    action="store_true",
+    help="세틀 후에도 YCB를 고정하지 않고 dynamic으로 둔다. 스폰 자세가 물리적으로 "
+    "안정한지 검사하는 용도 — 종료 시 물체별 이동/회전량을 출력한다.",
+)
+parser.add_argument(
+    "--ycb-collision",
+    choices=["convexHull", "convexDecomposition", "sdf", "boundingCube"],
+    default=None,
+    help="모든 YCB의 충돌 근사를 강제한다(단일 변수 A/B용). 기본은 물체별 설정.",
+)
 parser.add_argument("--max-steps", type=int, default=0, help="N 스텝 후 자동 종료 (0=무한)")
 parser.add_argument(
     "--wrist-viewport",
@@ -85,9 +106,9 @@ parser.add_argument(
 )
 args, _ = parser.parse_known_args()
 
-cpu_threads = int(os.environ.get("ISAAC_INDY7_CPU_THREADS", "8"))
+cpu_threads = int(os.environ.get("ISAAC_GRASPGEN_CPU_THREADS", "8"))
 if cpu_threads < 1:
-    raise ValueError("ISAAC_INDY7_CPU_THREADS must be >= 1")
+    raise ValueError("ISAAC_GRASPGEN_CPU_THREADS must be >= 1")
 simulation_app = SimulationApp(
     {
         "headless": args.headless,
@@ -101,12 +122,10 @@ from isaacsim.core.utils.extensions import enable_extension  # noqa: E402
 from isaacsim.core.utils.viewports import set_camera_view  # noqa: E402
 
 from control.grasp_execution import GraspExecutor  # noqa: E402
-from control.ik import Indy7Gripper, Indy7IK  # noqa: E402
 from graspgen.pointcloud import sample_fixed  # noqa: E402
 from graspgen.selection import select_executable_grasp  # noqa: E402
 from graspgen.visualization import draw_grasps, draw_pointcloud  # noqa: E402
 from sim.camera import WristCamera  # noqa: E402
-from sim.spawn import spawn_indy7  # noqa: E402
 from sim.ros2 import (  # noqa: E402
     CLOCK_TOPIC,
     JOINT_COMMAND_TOPIC,
@@ -117,16 +136,20 @@ from sim.ros2 import (  # noqa: E402
 from sim.ycb import (  # noqa: E402
     get_world_bounds,
     print_ycb_centers,
+    report_ycb_drift,
     set_ycb_kinematic,
+    settle_ycb,
     spawn_ycb,
+    ycb_pose_snapshot,
 )
 
 
 def main() -> None:
-    base_position = np.asarray(INDY7_POSITION, dtype=float)
+    spec = get_robot(args.robot)
+    base_position = np.asarray(spec.position, dtype=float)
 
-    if not os.path.isfile(INDY7_USD):
-        raise FileNotFoundError(f"indy7 USD 를 찾을 수 없음: {INDY7_USD}")
+    if not os.path.isfile(spec.usd_path):
+        raise FileNotFoundError(f"{spec.name} USD 를 찾을 수 없음: {spec.usd_path}")
 
     enable_extension("isaacsim.ros2.bridge")
     enable_extension("isaacsim.robot_motion.pink")
@@ -144,13 +167,21 @@ def main() -> None:
     )
     world.scene.add_default_ground_plane()
 
-    indy7 = world.scene.add(spawn_indy7(INDY7_USD, INDY7_PRIM_PATH, base_position))
-    print(f"[indy7] spawned '{INDY7_USD}' -> {INDY7_PRIM_PATH} @ {base_position.tolist()}")
+    robot = world.scene.add(spec.spawn(spec))
+    print(f"[{spec.name}] spawned '{spec.usd_path}' -> {spec.prim_path} @ {base_position.tolist()}")
 
-    ycb_paths = spawn_ycb(YCB_CONFIG, base_position=base_position)
+    # Spawned dynamic so the solver, not the placement code, decides the
+    # resting pose; settle_ycb pins them afterwards.
+    ycb_paths = spawn_ycb(
+        YCB_CONFIG,
+        base_position=base_position,
+        kinematic=False,
+        collision_approximation=args.ycb_collision,
+    )
 
     world.reset()
-    graph_path = create_ros2_action_graph(indy7.prim_path)
+    settle_ycb(world, ycb_paths, pin=not args.ycb_dynamic)
+    graph_path = create_ros2_action_graph(robot.prim_path)
     simulation_app.update()
     print(f"[ros2] Action Graph: {graph_path}")
     print(f"[ros2] Publisher: {JOINT_STATES_TOPIC}, {CLOCK_TOPIC}, {TF_TOPIC}")
@@ -161,16 +192,22 @@ def main() -> None:
         camera_prim_path="/OmniverseKit_Persp",
     )
 
-    ik = Indy7IK(indy7)
-    gripper = Indy7Gripper(indy7)
+    control_dt = 1.0 / CONTROL_HZ
+    ik = spec.make_ik(robot, dt=control_dt)
+    gripper = spec.make_gripper(robot)
     camera_config = dict(CAMERA_CONFIG)
     camera_config["enable_pointcloud"] = args.graspgen
-    wrist_camera = WristCamera(camera_config, parent_prim=ik.link_path("link6"), workdir=ROOT_DIR)
+    wrist_camera = WristCamera(
+        camera_config,
+        parent_prim=ik.link_path(spec.wrist_camera_link),
+        workdir=ROOT_DIR,
+    )
     wrist_camera.initialize()
     if not args.headless and args.wrist_viewport:
         wrist_camera.open_secondary_viewport()
-    print("[ik] Indy7IK ready")
+    print(f"[ik] {spec.name} PinkArmIK ready")
     print_ycb_centers(ycb_paths)
+    ycb_baseline = ycb_pose_snapshot(ycb_paths)
 
     if args.execute_grasp and not args.graspgen:
         raise ValueError("--execute-grasp requires --graspgen")
@@ -232,8 +269,8 @@ def main() -> None:
                 continue
             if reset_needed:
                 world.reset()
-                ik = Indy7IK(indy7)
-                gripper = Indy7Gripper(indy7)
+                ik = spec.make_ik(robot, dt=control_dt)
+                gripper = spec.make_gripper(robot)
                 wrist_camera.initialize()
                 if not args.headless and args.wrist_viewport:
                     wrist_camera.open_secondary_viewport()
@@ -241,8 +278,8 @@ def main() -> None:
                 grasp_executor = None
                 grasp_phase = None
                 grasp_target_path = None
-                for ycb_path in ycb_paths:
-                    set_ycb_kinematic(ycb_path, True)
+                settle_ycb(world, ycb_paths, pin=not args.ycb_dynamic)
+                ycb_baseline = ycb_pose_snapshot(ycb_paths)
                 reset_needed = False
 
             if target_position is not None and not graspgen_called:
@@ -253,7 +290,7 @@ def main() -> None:
                         f"[ik] step={step} reachable={reachable} "
                         f"ee_pos={np.asarray(ee_pos).round(4).tolist()} "
                         f"ee_quat={np.asarray(ee_quat).round(4).tolist()} "
-                        f"arm_q={np.asarray(indy7.get_joint_positions())[:6].round(3).tolist()} "
+                        f"arm_q={np.asarray(robot.get_joint_positions())[:spec.num_arm_dofs].round(3).tolist()} "
                         f"gripper_q={gripper.hold_position:.4f}"
                     )
 
@@ -334,6 +371,7 @@ def main() -> None:
                             result.grasps,
                             result.confidences,
                             grasp_cloud,
+                            gripper_depth=spec.gripper.graspgen_depth,
                             support_z=float(YCB_CONFIG["spawn"].get("support_z", 0.0)),
                         )
                     best_pose_path = os.path.join(grasp_dir, "best_grasp_world.npy")
@@ -363,6 +401,11 @@ def main() -> None:
             step += 1
             if args.max_steps and step >= args.max_steps:
                 print_ycb_centers(ycb_paths)
+                report_ycb_drift(
+                    ycb_baseline,
+                    ycb_pose_snapshot(ycb_paths),
+                    label=f"{step} steps, kinematic={not args.ycb_dynamic}",
+                )
                 print(f"[main] max-steps({args.max_steps}) 도달 - 종료")
                 break
     finally:

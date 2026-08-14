@@ -19,7 +19,7 @@ try:
 except ImportError as exc:  # pragma: no cover - exercised by the Isaac runtime setup
     raise ImportError(
         "GraspGen client dependencies are missing. Run "
-        "'./scripts/install_graspgen_client_deps.py' from isaac_indy7."
+        "'./scripts/install_graspgen_client_deps.py' from isaac_graspgen."
     ) from exc
 
 
