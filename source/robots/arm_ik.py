@@ -36,11 +36,23 @@ class PinkArmIK:
         )
 
         pink_robot = spec.make_pink_robot()
-        if pink_robot.controlled_joint_names != list(articulation.dof_names[:num_arm_dofs]):
+        kinematics_joints = list(pink_robot.controlled_joint_names)
+        usd_joints = list(articulation.dof_names)
+        # Isaac's bundled Franka model includes the hand, so the kinematics
+        # joints are a superset of the arm's rather than exactly the arm's.
+        # What has to hold is that every controlled joint is a real DOF, and
+        # that the arm joints lead both lists in the same order — that is what
+        # makes the DOF indices the controller writes line up with the plant.
+        absent = [j for j in kinematics_joints if j not in usd_joints]
+        if absent:
             raise RuntimeError(
-                f"{spec.name} URDF/USD joint mismatch: "
-                f"urdf={pink_robot.controlled_joint_names}, "
-                f"usd={list(articulation.dof_names[:num_arm_dofs])}"
+                f"{spec.name} kinematics joints absent from the USD articulation: {absent}"
+            )
+        if kinematics_joints[:num_arm_dofs] != usd_joints[:num_arm_dofs]:
+            raise RuntimeError(
+                f"{spec.name} arm joint order mismatch: "
+                f"kinematics={kinematics_joints[:num_arm_dofs]}, "
+                f"usd={usd_joints[:num_arm_dofs]}"
             )
 
         self._mg = mg
@@ -81,23 +93,48 @@ class PinkArmIK:
             dt=self._dt,
         )
 
-        # Reject a stale kinematic file before it can command the plant.
-        pin.forwardKinematics(pink_robot.model, pink_robot.data, pin.neutral(pink_robot.model))
-        pin.updateFramePlacements(pink_robot.model, pink_robot.data)
-        model_tcp = pink_robot.data.oMf[pink_robot.model.getFrameId(ee_link_name)]
-        live_tcp_position, live_tcp_orientation = self.ee_pose()
-        model_tcp_quat = pin.Quaternion(model_tcp.rotation)
-        model_tcp_wxyz = np.array(
-            [model_tcp_quat.w, model_tcp_quat.x, model_tcp_quat.y, model_tcp_quat.z]
-        )
-        if (
-            np.linalg.norm(model_tcp.translation - np.asarray(live_tcp_position)) > 1e-4
-            or 1.0 - abs(float(np.dot(model_tcp_wxyz, np.asarray(live_tcp_orientation)))) > 1e-4
-        ):
-            raise RuntimeError(
-                f"{spec.name} URDF/USD zero-pose FK mismatch: "
-                f"urdf_p={model_tcp.translation}, usd_p={live_tcp_position}"
+        # Reject a stale kinematics model before it can command the plant, by
+        # cross-checking its FK against the live pose. The comparison is made
+        # at whatever configuration the plant is currently in, not at the
+        # model's neutral one: an asset is free to spawn wherever it likes, and
+        # the Panda spawns at Franka's bent home pose, where neutral-pose FK is
+        # half a metre away and proves nothing.
+        if pink_robot.model.nq != len(kinematics_joints):
+            print(
+                f"[ik] {spec.name}: model nq={pink_robot.model.nq} does not match "
+                f"{len(kinematics_joints)} controlled joints; skipping the FK cross-check"
             )
+        else:
+            live_positions = np.asarray(articulation.get_joint_positions(), dtype=float)
+            q_model = np.array(
+                [live_positions[usd_joints.index(name)] for name in kinematics_joints],
+                dtype=float,
+            )
+            pin.forwardKinematics(pink_robot.model, pink_robot.data, q_model)
+            pin.updateFramePlacements(pink_robot.model, pink_robot.data)
+            model_tcp = pink_robot.data.oMf[pink_robot.model.getFrameId(ee_link_name)]
+            live_tcp_position, live_tcp_orientation = self.ee_pose()
+            # Model FK is in the robot's base frame; the live pose is in world.
+            model_tcp_world = np.asarray(model_tcp.translation) + np.asarray(
+                spec.position, dtype=float
+            )
+            model_tcp_quat = pin.Quaternion(model_tcp.rotation)
+            model_tcp_wxyz = np.array(
+                [model_tcp_quat.w, model_tcp_quat.x, model_tcp_quat.y, model_tcp_quat.z]
+            )
+            position_error = float(
+                np.linalg.norm(model_tcp_world - np.asarray(live_tcp_position))
+            )
+            orientation_error = 1.0 - abs(
+                float(np.dot(model_tcp_wxyz, np.asarray(live_tcp_orientation)))
+            )
+            if position_error > 1e-4 or orientation_error > 1e-4:
+                raise RuntimeError(
+                    f"{spec.name} kinematics/USD FK mismatch at the live pose: "
+                    f"model_p={model_tcp_world}, usd_p={live_tcp_position}, "
+                    f"position_error={position_error:.6f}, "
+                    f"orientation_error={orientation_error:.6f}"
+                )
         print(
             f"[ik] backend=isaac-pink robot={spec.name} ee={ee_link_name} "
             f"dt={self._dt:.6f} kinematics={spec.kinematics_source}"

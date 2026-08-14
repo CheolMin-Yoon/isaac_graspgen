@@ -26,7 +26,7 @@ if SOURCE_DIR not in sys.path:
     sys.path.insert(0, SOURCE_DIR)
 
 from graspgen import config as graspgen_config
-from robots import available_robots, get_robot
+from robots import DEFAULT_ROBOT, available_robots, get_robot
 from sim.config import (
     CAMERA_CONFIG,
     CONTROL_HZ,
@@ -42,9 +42,9 @@ from isaacsim import SimulationApp
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--robot",
-    default="indy7",
+    default=DEFAULT_ROBOT,
     choices=available_robots(),
-    help="구동할 로봇 (source/robots 레지스트리)",
+    help=f"구동할 로봇 (source/robots 레지스트리, 기본 {DEFAULT_ROBOT})",
 )
 parser.add_argument("--headless", action="store_true", help="GUI 없이 실행")
 parser.add_argument(
@@ -148,9 +148,6 @@ def main() -> None:
     spec = get_robot(args.robot)
     base_position = np.asarray(spec.position, dtype=float)
 
-    if not os.path.isfile(spec.usd_path):
-        raise FileNotFoundError(f"{spec.name} USD 를 찾을 수 없음: {spec.usd_path}")
-
     enable_extension("isaacsim.ros2.bridge")
     enable_extension("isaacsim.robot_motion.pink")
     enable_extension("isaacsim.robot_setup.assembler")
@@ -168,7 +165,10 @@ def main() -> None:
     world.scene.add_default_ground_plane()
 
     robot = world.scene.add(spec.spawn(spec))
-    print(f"[{spec.name}] spawned '{spec.usd_path}' -> {spec.prim_path} @ {base_position.tolist()}")
+    print(
+        f"[{spec.name}] spawned '{spec.resolve_usd_path()}' -> "
+        f"{spec.prim_path} @ {base_position.tolist()}"
+    )
 
     # Spawned dynamic so the solver, not the placement code, decides the
     # resting pose; settle_ycb pins them afterwards.
@@ -195,22 +195,31 @@ def main() -> None:
     control_dt = 1.0 / CONTROL_HZ
     ik = spec.make_ik(robot, dt=control_dt)
     gripper = spec.make_gripper(robot)
-    camera_config = dict(CAMERA_CONFIG)
-    camera_config["enable_pointcloud"] = args.graspgen
-    wrist_camera = WristCamera(
-        camera_config,
-        parent_prim=ik.link_path(spec.wrist_camera_link),
-        workdir=ROOT_DIR,
-    )
-    wrist_camera.initialize()
-    if not args.headless and args.wrist_viewport:
-        wrist_camera.open_secondary_viewport()
+    wrist_camera = None
+    if spec.wrist_camera_link is not None:
+        camera_config = dict(CAMERA_CONFIG)
+        camera_config["enable_pointcloud"] = args.graspgen
+        wrist_camera = WristCamera(
+            camera_config,
+            parent_prim=ik.link_path(spec.wrist_camera_link),
+            workdir=ROOT_DIR,
+        )
+        wrist_camera.initialize()
+        if not args.headless and args.wrist_viewport:
+            wrist_camera.open_secondary_viewport()
+    else:
+        print(f"[camera] {spec.name} has no wrist camera mount; skipping")
     print(f"[ik] {spec.name} PinkArmIK ready")
     print_ycb_centers(ycb_paths)
     ycb_baseline = ycb_pose_snapshot(ycb_paths)
 
     if args.execute_grasp and not args.graspgen:
         raise ValueError("--execute-grasp requires --graspgen")
+    if args.graspgen and wrist_camera is None:
+        raise ValueError(
+            f"--graspgen needs a wrist camera, but robot '{spec.name}' has no "
+            "wrist_camera_link. GraspGen is fed from the wrist point cloud."
+        )
 
     graspgen_client = None
     if args.graspgen:
@@ -271,9 +280,10 @@ def main() -> None:
                 world.reset()
                 ik = spec.make_ik(robot, dt=control_dt)
                 gripper = spec.make_gripper(robot)
-                wrist_camera.initialize()
-                if not args.headless and args.wrist_viewport:
-                    wrist_camera.open_secondary_viewport()
+                if wrist_camera is not None:
+                    wrist_camera.initialize()
+                    if not args.headless and args.wrist_viewport:
+                        wrist_camera.open_secondary_viewport()
                 graspgen_called = False
                 grasp_executor = None
                 grasp_phase = None
@@ -322,7 +332,8 @@ def main() -> None:
                     f"target={gripper.target_position:.4f} "
                     f"effort={gripper.measured_effort:.4f}"
                 )
-            wrist_camera.maybe_capture(step)
+            if wrist_camera is not None:
+                wrist_camera.maybe_capture(step)
 
             if graspgen_client is not None and not graspgen_called and step >= args.graspgen_step:
                 target_path = ycb_paths[args.grasp_object_index]

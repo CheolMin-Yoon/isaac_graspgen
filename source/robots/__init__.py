@@ -16,10 +16,13 @@ from robots.base import GripperSpec, RobotSpec
 
 # name -> module exporting SPEC
 _ROBOT_MODULES = {
+    "panda": "robots.panda",
     "indy7": "robots.indy7",
 }
 
-__all__ = ["GripperSpec", "RobotSpec", "available_robots", "get_robot"]
+DEFAULT_ROBOT = "panda"
+
+__all__ = ["DEFAULT_ROBOT", "GripperSpec", "RobotSpec", "available_robots", "get_robot"]
 
 
 def available_robots() -> list[str]:
@@ -32,6 +35,7 @@ def get_robot(name: str) -> RobotSpec:
             f"unknown robot '{name}'; available={available_robots()}. "
             "See source/robots/panda/README.md for what a new arm must provide."
         )
+
     spec = import_module(_ROBOT_MODULES[name]).SPEC
     if spec.name != name:
         raise RuntimeError(f"robot module '{_ROBOT_MODULES[name]}' exports SPEC.name={spec.name!r}")

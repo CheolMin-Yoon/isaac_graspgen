@@ -14,7 +14,7 @@ def spawn(spec):
     — the root is found by scanning the referenced subtree instead of assuming
     it sits exactly at ``spec.prim_path``.
     """
-    usd_path = spec.usd_path
+    usd_path = spec.resolve_usd_path()
     prim_path = spec.prim_path
 
     import omni.usd

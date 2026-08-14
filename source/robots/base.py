@@ -27,8 +27,11 @@ class GripperSpec:
     """
 
     name: str
-    # articulation DOF driven for open/close
-    joint_name: str
+    # Articulation DOFs commanded for open/close. One entry when the remaining
+    # fingers follow through mimic joints (Robotiq 2F-140), one per finger when
+    # they are independently actuated (Panda hand).
+    joint_names: Sequence[str]
+    # Half-width for a parallel jaw, joint angle for a rotary finger.
     open_position: float
     # Distance (m) from the gripper base pose GraspGen returns to the tool
     # center, along the grasp local +z. Used to score candidates, not to move.
@@ -45,6 +48,9 @@ class RobotSpec:
     """One arm plus the gripper mounted on it."""
 
     name: str
+    # Either an absolute local path, or an assets-root-relative path starting
+    # with "/Isaac/" for a robot Isaac already ships. Resolve it through
+    # ``resolve_usd_path`` rather than reading it directly.
     usd_path: str
     prim_path: str
     position: Sequence[float]
@@ -61,11 +67,35 @@ class RobotSpec:
     num_arm_dofs: int
     # Bent, nonsingular seed posture applied before reactive pose tracking
     reach_posture: Sequence[float]
-    # Articulation link the wrist camera is mounted under
-    wrist_camera_link: str
+    # Articulation link carrying the wrist camera mount, or None when the asset
+    # has no mount. WristCamera re-poses an existing mount, it does not create
+    # one, so None means no wrist camera and therefore no GraspGen input.
+    wrist_camera_link: str | None
     gripper: GripperSpec
     # (spec) -> SingleArticulation, already wrapped for world.scene.add
     spawn: Callable
+
+    def resolve_usd_path(self) -> str:
+        """Absolute USD path, expanding an assets-root-relative "/Isaac/..." path.
+
+        Local assets are checked for existence here so a moved file fails now
+        rather than as a confusing USD composition error later; a Nucleus path
+        can only be checked by trying to load it.
+        """
+        if not self.usd_path.startswith("/Isaac/"):
+            if not os.path.isfile(self.usd_path):
+                raise FileNotFoundError(f"{self.name} USD not found: {self.usd_path}")
+            return self.usd_path
+
+        from isaacsim.storage.native import get_assets_root_path
+
+        assets_root = get_assets_root_path()
+        if assets_root is None:
+            raise RuntimeError(
+                f"{self.name} needs the Isaac asset root for {self.usd_path}, but "
+                "get_assets_root_path() returned None; check Nucleus/assets access"
+            )
+        return assets_root + self.usd_path
 
     def make_ik(self, articulation, dt: float):
         """Build the PINK controller for this arm."""

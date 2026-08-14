@@ -2,8 +2,16 @@
 
 Isaac Sim standalone 6.0.1에서 매니퓰레이터 + 그리퍼, YCB object spawn,
 Isaac Sim 공식 PINK IK, wrist camera capture, GraspGen 연동을 실행하는 최소
-워크스페이스다. 현재 구현된 로봇은 Indy7 + Robotiq 2F-140 하나이며,
-`--robot`으로 선택한다.
+워크스페이스다. 로봇은 `--robot`으로 고른다.
+
+| 로봇 | 그리퍼 | kinematics | wrist camera | GraspGen |
+|---|---|---|---|---|
+| `panda` (기본) | Panda hand | Isaac 번들 `franka` | 없음 | 체크포인트 미확보 |
+| `indy7` | Robotiq 2F-140 | 자체 URDF | D455 | 사용 가능 |
+
+Panda는 스폰/IK까지 동작하며 GraspGen 경로는 아직 막혀 있다 — `franka.usd`에
+카메라 마운트가 없고 Franka 체크포인트가 로컬에 없다. 자세한 내용과 추가 절차는
+[`source/robots/panda/README.md`](source/robots/panda/README.md)를 본다.
 
 Repo: https://github.com/CheolMin-Yoon/isaac_graspgen
 

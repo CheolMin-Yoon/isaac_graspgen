@@ -1,11 +1,64 @@
-# Adding an arm (worked example: Franka Panda)
+# Franka Panda
 
-Nothing here is implemented yet. This file is the checklist a second arm has to
-satisfy — treat any item that turns out to be wrong as a sign the `RobotSpec`
-seam is in the wrong place, and move the seam rather than working around it.
-That already happened once: `kinematics_urdf: str` became
-`make_pink_robot: Callable` when it turned out the Panda should load Isaac's
-bundled model rather than a path.
+**Implemented** — `SPEC` in `__init__.py`, spawn in `spawn.py`, registered as
+the default robot. This file records what it took, and what is still missing.
+
+Adding the arm moved the `RobotSpec` seam twice, which is the intended
+response when a second case does not fit:
+
+- `kinematics_urdf: str` became `make_pink_robot: Callable`, because the Panda
+  loads Isaac's bundled model rather than a path in this repo.
+- `usd_path` gained `resolve_usd_path()`, because `franka.usd` lives under the
+  Isaac assets root rather than on local disk.
+- `wrist_camera_link` became optional, because `franka.usd` has no camera mount.
+- `GripperSpec.joint_name` became `joint_names`, because the Panda hand drives
+  two fingers where the Robotiq drives one.
+
+## Still missing
+
+1. **No wrist camera.** `franka.usd` carries no D455 mount, and `WristCamera`
+   re-poses an existing mount rather than creating one, so `wrist_camera_link`
+   is None and `--graspgen` is rejected for this arm. Either author a USD
+   variant with a mount (the way `indy7_v2_with_2f-140_d455.usd` does) or teach
+   `WristCamera` to create one.
+2. **No GraspGen checkpoint.** GraspGen publishes a Franka Panda model but
+   `/home/frlab/GraspGenModels/checkpoints/` only holds the Robotiq pair.
+   `scripts/run_graspgen_server.py --gripper panda_hand` will exit naming the
+   missing file. Fetch from HuggingFace `adithyamurali/GraspGenModels`.
+3. **Scene geometry is still Indy7-shaped.** `YCB_CONFIG["spawn"]` places
+   objects on a 0.70 m arc tuned to the Indy7's reach, and the
+   `source/graspgen/config.py` prefilter gates encode a table-mounted arm
+   reaching outward. Neither has been re-checked against the Panda's workspace.
+
+## Where the values came from
+
+Everything is Isaac's, not ours — see
+`exts/isaacsim.robot_motion.pink.examples/.../ik_controller/scenario.py`
+(`FrankaPinkIKExample`) and `.../multi_task/scenario.py`.
+
+| fact | value |
+|---|---|
+| controller gains | `position_cost=5.0`, `orientation_cost=0.05`, `posture_cost=5e-3`, `solver="osqp"`, `dt=1/60` — already what `PinkArmIK` hardcodes |
+| tool frame | `panda_hand` |
+| hand → fingertip midpoint | `[0.0, 0.0, 0.1034]`, used as `graspgen_depth` |
+| reach posture | j1 `0.012`, j2 `-0.568`, j3 `0.0`, j4 `-2.811`, j5 `0.0`, j6 `3.037`, j7 `0.741` |
+| finger joints | `panda_finger_joint1` / `panda_finger_joint2`, both `0.035` open |
+| kinematics | `load_pink_supported_robot("franka")` — bundled under `robot_configurations/`, which also has `ur10` |
+| USD | `{assets_root}/Isaac/Robots/FrankaRobotics/FrankaPanda/franka.usd` |
+
+## Adding a third arm
+
+1. Assets: a USD, and either a checked URDF (like Indy7) or a bundled name
+   (like Panda). `PinkArmIK` refuses to run unless the controlled joint names
+   match the USD DOF order **and** the zero-pose FK of the tool frame agrees
+   with the live USD to 1e-4.
+2. `spawn(spec) -> SingleArticulation`. Indy7's does real surgery because its
+   legacy asset shipped a broken mimic graph; the Panda's is 20 lines. If yours
+   needs surgery, that is a problem with the asset.
+3. Gripper: reuse a `GripperSpec` if the hardware matches, otherwise add one
+   plus a controller class. GraspGen is trained per gripper — its checkpoints
+   travel with the `GripperSpec`, not with the arm.
+4. Export `SPEC` and add it to `_ROBOT_MODULES` in `source/robots/__init__.py`.
 
 ## 0. What Isaac already gives you
 

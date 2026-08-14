@@ -18,8 +18,8 @@ from graspgen.pointcloud import crop_aabb, sample_fixed
 from graspgen.selection import select_executable_grasp
 from graspgen.visualization import grasp_axis_lines
 from control.grasp_execution import GraspExecutor
-from robots import available_robots, get_robot
-from robots.gripper import ROBOTIQ_2F_140
+from robots import DEFAULT_ROBOT, available_robots, get_robot
+from robots.gripper import ROBOTIQ_2F_140, ParallelFingerGripper, SingleJointGripper
 from sim.config import CONTROL_HZ, PHYSICS_HZ, RENDERING_HZ
 
 
@@ -103,6 +103,7 @@ def test_execution_selection_rejects_table_colliding_best_grasp() -> None:
 
 def test_robot_registry_exposes_indy7_spec() -> None:
     assert "indy7" in available_robots()
+    assert DEFAULT_ROBOT in available_robots()
 
     spec = get_robot("indy7")
     assert spec.name == "indy7"
@@ -115,13 +116,41 @@ def test_robot_registry_exposes_indy7_spec() -> None:
     assert os.path.isfile(spec.kinematics_source), spec.kinematics_source
 
 
+def test_panda_spec_uses_isaacs_own_assets() -> None:
+    spec = get_robot("panda")
+    assert spec.name == "panda"
+    assert spec.num_arm_dofs == 7
+    assert len(spec.reach_posture) == spec.num_arm_dofs
+    # Nothing for the Panda is authored in this repo: the USD is assets-root
+    # relative and the kinematics come from the PINK extension's bundle, so
+    # neither is a path on disk to check here.
+    assert spec.usd_path.startswith("/Isaac/")
+    assert spec.kinematics_source == "bundled:franka"
+    # Two independently actuated fingers — the Robotiq's single-DOF controller
+    # would close one and leave the other open.
+    assert len(spec.gripper.joint_names) == 2
+    assert spec.gripper.make is ParallelFingerGripper
+    # franka.usd has no wrist camera mount, so GraspGen has no input for it.
+    assert spec.wrist_camera_link is None
+
+
+def test_single_joint_gripper_rejects_a_two_finger_spec() -> None:
+    panda_hand = get_robot("panda").gripper
+    try:
+        SingleJointGripper(object(), panda_hand)
+    except ValueError as error:
+        assert "ParallelFingerGripper" in str(error)
+    else:
+        raise AssertionError("SingleJointGripper must refuse a two-DOF gripper spec")
+
+
 def test_unknown_robot_names_the_available_ones() -> None:
     try:
-        get_robot("panda")
+        get_robot("ur10")
     except KeyError as error:
-        assert "indy7" in str(error)
+        assert "indy7" in str(error) and "panda" in str(error)
     else:
-        raise AssertionError("get_robot('panda') should raise until panda is implemented")
+        raise AssertionError("get_robot('ur10') should raise; ur10 is not registered")
 
 
 def test_pointcloud_preparation() -> None:
