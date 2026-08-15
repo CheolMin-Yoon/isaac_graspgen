@@ -62,6 +62,29 @@ def _author_pinhole_optics(prim_path, resolution, focal_length, horizontal_apert
         camera.CreateVerticalApertureAttr().Set(horizontal * height / width)
 
 
+def set_friction_correlation_distance(distance: float) -> bool:
+    """Tighten how aggressively PhysX merges contact points into friction anchors.
+
+    Lives here beside add_dome_light for the same reason: it is a scene-level
+    default that has to be authored rather than inherited, and getting it wrong
+    is invisible until something contact-rich fails.
+    """
+    from pxr import PhysxSchema
+
+    from isaacsim.core.utils.stage import get_current_stage
+
+    stage = get_current_stage()
+    for prim in stage.Traverse():
+        if prim.GetTypeName() == "PhysicsScene":
+            PhysxSchema.PhysxSceneAPI.Apply(prim).CreateFrictionCorrelationDistanceAttr().Set(
+                float(distance)
+            )
+            print(f"[physics] frictionCorrelationDistance={distance} on {prim.GetPath()}")
+            return True
+    print("[physics] no PhysicsScene prim found; frictionCorrelationDistance left at default")
+    return False
+
+
 def add_dome_light(prim_path: str = "/World/domeLight", intensity: float = 1000.0) -> str:
     """Author a dome light so cameras have something to see.
 

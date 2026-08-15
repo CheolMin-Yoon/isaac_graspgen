@@ -102,6 +102,19 @@ CAMERA_CONFIG = {
     "output_dir": "output/camera",
 }
 
+# PhysX merges nearby contact points into a single friction anchor within this
+# distance. At the 0.025 default a 66 mm can's contact patch collapses to one
+# anchor and the object slides or spins out from between the fingers instead of
+# being held — which is what "the gripper pushes the object aside" looks like.
+# IsaacLab's manipulation tasks cut it to this value for the same reason
+# (stack_env_cfg.py PhysxCfg).
+FRICTION_CORRELATION_DISTANCE = 0.00625
+
+# Contact-rich grasping needs more solver work on the objects than the default.
+# IsaacLab gives its manipulated props 16/1 while leaving the arm lower.
+YCB_SOLVER_POSITION_ITERATIONS = 16
+YCB_SOLVER_VELOCITY_ITERATIONS = 1
+
 PHYSICS_HZ = 240
 RENDERING_HZ = 60
 CONTROL_HZ = RENDERING_HZ

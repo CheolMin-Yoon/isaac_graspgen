@@ -154,8 +154,19 @@ def spawn_ycb(
         xform.set_world_pose(position=position, orientation=orientation)
         aligned_minimum, _ = _world_bounds(root)
 
+        from pxr import PhysxSchema
+
         rigid_body = UsdPhysics.RigidBodyAPI.Apply(root)
         rigid_body.CreateKinematicEnabledAttr(bool(kinematic))
+        # Grasping is contact-rich; the default solver budget lets a held object
+        # jitter out of the fingers.
+        physx_body = PhysxSchema.PhysxRigidBodyAPI.Apply(root)
+        physx_body.CreateSolverPositionIterationCountAttr(
+            int(cfg.get("solver_position_iterations", 16))
+        )
+        physx_body.CreateSolverVelocityIterationCountAttr(
+            int(cfg.get("solver_velocity_iterations", 1))
+        )
         rigid_body.CreateVelocityAttr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
         rigid_body.CreateAngularVelocityAttr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
         UsdPhysics.MassAPI.Apply(root).CreateMassAttr(float(obj["mass"]))

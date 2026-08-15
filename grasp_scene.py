@@ -29,6 +29,7 @@ from graspgen import config as graspgen_config
 from robots import DEFAULT_ROBOT, available_robots, get_robot
 from sim.config import (
     CAMERA_CONFIG,
+    FRICTION_CORRELATION_DISTANCE,
     CONTROL_HZ,
     PHYSICS_HZ,
     PHYSICS_DT,
@@ -138,7 +139,7 @@ from control.grasp_execution import GraspExecutor  # noqa: E402
 from graspgen.pointcloud import sample_fixed  # noqa: E402
 from graspgen.selection import select_executable_grasp  # noqa: E402
 from graspgen.visualization import draw_grasps, draw_pointcloud  # noqa: E402
-from sim.camera import WristCamera, add_dome_light  # noqa: E402
+from sim.camera import WristCamera, add_dome_light, set_friction_correlation_distance  # noqa: E402
 from sim.ros2 import (  # noqa: E402
     CLOCK_TOPIC,
     JOINT_COMMAND_TOPIC,
@@ -177,6 +178,7 @@ def main() -> None:
     )
     world.scene.add_default_ground_plane()
     add_dome_light()
+    set_friction_correlation_distance(FRICTION_CORRELATION_DISTANCE)
 
     robot = world.scene.add(spec.spawn(spec))
     print(

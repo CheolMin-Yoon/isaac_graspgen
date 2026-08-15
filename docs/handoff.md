@@ -105,14 +105,17 @@ IsaacLab 실측 대조로 반증된 가설:
   지오메트리를 보지 않게 할 뿐, 물체는 베이스와 같은 평면에 있다. 우리 Z 배치는
   틀리지 않았다. 다만 우리는 로봇 바로 아래에 실제 ground plane 충돌체가 있다.
 
-다음에 볼 후보 (IsaacLab이 명시적으로 바꾸는 값들, 우리는 기본값):
+`frictionCorrelationDistance` 0.00625과 YCB solver 16/1을 적용했으나 **효과가
+없었다** — 27.7 mm로 여전하다. 접촉 물리 파라미터는 원인이 아니다.
 
-- **`friction_correlation_distance`**: IsaacLab은 0.025 → **0.00625**로 4배 줄인다
-  (`stack_env_cfg.py:172-177`). 기본값에서는 작은 물체의 접촉 패치가 단일 friction
-  anchor로 뭉쳐져 **손가락 사이에서 미끄러지거나 돌아나간다.** 우리 증상이 정확히
-  "물체가 밀려남"이므로 가장 유력하다.
-- **물체 solver iteration**: IsaacLab은 물체에 16/1을 준다
-  (`stack_joint_pos_env_cfg.py:106-113`). 우리는 로봇에만 주고 YCB에는 안 준다.
+**가장 유력한 남은 가설: TCP 프레임 불일치.** 오차가 그리퍼 폭·마찰·반경을 바꿔도
+23.9 / 26.1 / 27.7 / 30.0 mm로 일정하게 유지되는 것은 접촉 현상이 아니라 **상수
+오프셋의 서명**이다. 우리는 `ee_link_name="panda_hand"`로 panda_hand를 직접 구동하고
+`TCP_OFFSET=0`이다. 반면 IsaacLab은 IK가 panda_hand +0.107 프레임을 구동하고 파지
+판정은 +0.1034를 쓴다. GraspGen의 Franka 규약이 어느 프레임 기준인지 확인해야 한다
+— `/home/frlab/GraspGenModels/checkpoints/graspgen_franka_panda.yml`과 GraspGen
+저장소의 gripper 정의를 볼 것. 목표가 물체 안쪽으로 파고들면 팔이 캔에 막혀
+정확히 지금 같은 정체가 생긴다.
 - **Franka USD가 다르다**: IsaacLab은 `{ISAACLAB_NUCLEUS_DIR}/Robots/FrankaEmika/
   panda_instanceable.usd`를 쓴다(`franka.py:28`). 우리가 쓰는
   `/Isaac/Robots/FrankaRobotics/FrankaPanda/franka.usd`는 `Gripper`/`Mesh`
