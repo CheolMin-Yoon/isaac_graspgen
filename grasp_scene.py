@@ -449,6 +449,23 @@ def main() -> None:
                             f"outward={selection['outward_approach']:.4f} "
                             f"tool_distance={selection['tool_distance']:.4f}"
                         )
+                    if grasp_target_path is not None:
+                        # The selection gate and every GraspGen candidate are
+                        # anchored on the mean of the observed points, which is
+                        # a one-sided view of the object: for a can seen from a
+                        # wrist camera mounted 10cm off-axis, that mean sits
+                        # somewhere on the near surface, not on the can's axis.
+                        # Print the gap so a grasp that is correct in the
+                        # observed frame and wrong in the world is legible as
+                        # such rather than as an execution error.
+                        cloud_centroid = np.asarray(grasp_cloud, dtype=float).reshape(-1, 3).mean(axis=0)
+                        true_min, true_max = get_world_bounds(grasp_target_path)
+                        true_center = 0.5 * (true_min + true_max)
+                        print(
+                            f"[grasp] observed centroid={cloud_centroid.round(4).tolist()} "
+                            f"true center={true_center.round(4).tolist()} "
+                            f"gap={np.round((cloud_centroid - true_center) * 1000, 1).tolist()}mm"
+                        )
                     if args.execute_grasp:
                         grasp_executor = GraspExecutor(ik, gripper)
                         grasp_executor.start(result.grasps[best])

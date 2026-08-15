@@ -19,7 +19,7 @@ import numpy as np
 # what the gate measures: lift converged to 2.1mm of position while drifting to
 # 0.220 rad, against a 0.150 rad tolerance. Position still leads, by 5:1.
 POSITION_COST = 5.0
-ORIENTATION_COST = 1.0
+ORIENTATION_COST = 3.0
 POSTURE_COST = 5e-3
 
 

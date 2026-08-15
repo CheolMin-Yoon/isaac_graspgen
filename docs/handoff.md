@@ -21,7 +21,8 @@ GraspGen ZMQ 연결의 구현 범위, 실행법, 실제 검증 결과와 현재 
   같은 워크스페이스에서 다루기로 하면서 뒤집혔다. 팔은 `--robot`으로 고르고,
   로봇 종속 사실은 `source/robots/<name>/`의 `SPEC`(`RobotSpec`)에 모은다.
   등록된 로봇은 `panda`(기본값)와 `indy7`이다. Panda는 스폰/IK/카메라/GraspGen
-  추론까지 동작하고 approach 단계에서 막혀 있다 — 아래 진행 상황 절을 볼 것.
+  추론에 더해 **pregrasp → approach → close → lift → done 전 구간을 완주**한다.
+  남은 것은 파지 자체다(폐쇄축 기준 14 mm 어긋남) — 아래 진행 상황 절을 볼 것.
 - 루트 실행 파일은 `grasp_scene.py` 하나, 실행은 `scripts/*.py` 파이썬 런처로
   한다. 재사용 코드는 `source/` 밑 주제별 패키지(`robots/`=로봇 레지스트리·IK·
   그리퍼·로봇 자산, `sim/`=YCB·카메라·ros2, `control/`=grasp 실행,
@@ -122,8 +123,53 @@ PhysX는 관절 한계를 3e-6 rad 정도 일상적으로 넘기는데, PINK는 
    다시 만들지 않는다.
 
 부수 관측: 실패 시점에 손가락이 0.0400(완전 개방)이었다 — close 단계를 90스텝
-지났는데도. 그리퍼 close가 실제로 먹었는지 확인하려고 위상 전이마다
-`target / measured / effort`를 찍게 했다.
+지났는데도. 위상 전이마다 `target / measured / effort`를 찍게 해서 확인한 결과,
+**331 스텝 동안 닫으라고 명령했는데 손가락이 0.0400에서 전혀 움직이지 않았다**
+(effort 5.6). 원인은 같은 배선이었다: `PinkArmIK`가 `set_dof_position_targets`에
+**9개 DOF 전부**를 썼다. Isaac의 번들 Franka 모델은 손가락 관절을 포함하므로 QP가
+그것까지 풀고, posture task가 컨트롤러 reset 시점 값으로 끌어당긴다. 팔 컨트롤러와
+그리퍼 컨트롤러가 매 스텝 같은 DOF를 놓고 싸웠다. IK 쓰기를 팔 DOF로 제한하자
+그리퍼가 닫힌다. 손가락은 tool frame 바깥에 있어서 팔 추종에는 손실이 없다.
+
+### 여기까지의 결과: 전 구간 완주
+
+세 수정(클램프 · 팔 전용 쓰기 · orientation_cost) 후 위상 기계가 완주한다:
+
+```
+pregrasp -> approach -> close -> lift -> done     (solve_ik 실패 0회)
+```
+
+`orientation_cost`를 0.05에서 1.0으로 올린 것이 lift를 통과시켰다. 측정된 실패는
+`position=2.1mm(통과) / orientation=0.220rad(초과, tol 0.150)`이었다 — QP가 위치를
+100배 무겁게 잡고 있어서 **게이트가 재는 바로 그 양을 솔버가 버리고 있었다**.
+공식 예제(`FrankaPinkIKExample`)의 5.0/0.05를 그대로 쓴 것이 화근인데, 그 예제는
+목표를 텔레오퍼레이션할 뿐 도착 여부를 묻는 수렴 판정이 아예 없어서 이 대가를
+치르지 않는다. 5:1로 낮추자 lift가 done까지 간다.
+
+### 남은 문제: 파지가 캔을 비껴간다
+
+캔은 여전히 테이블 위다(`bottom_z=-0.0000`). 규약에 의존하지 않는 계측을 넣었다 —
+두 손가락 링크의 world pose를 직접 읽어서 **둘을 잇는 선을 폐쇄축으로 정의**한다
+(`report_finger_straddle`). URDF가 그 축을 뭐라 부르든 상관없다.
+
+```
+straddle: lateral miss=-14.1mm, finger span=80.0mm,
+          object depth from hand=147.3mm (fingertip reach 103.4mm)
+```
+
+캔 반경 33 mm, 손가락 반폭 40 mm — 편측 여유가 7 mm뿐인데 폐쇄축 기준으로
+**14 mm 어긋나 있다**. 한쪽 손가락은 캔에 박히고 반대쪽은 헛돈다. 실제로 close에서
+`measured=0.0356 effort=3.66`으로 뭔가에 걸리지만 캔을 물지는 못한다.
+
+이 14 mm의 출처를 가르는 중이다. 위상 전이마다 추종 오차를 찍게 했다 — approach가
+2 mm로 추종했는데 14 mm가 어긋났다면 GraspGen 자세 쪽이고, 10 mm로 추종했다면
+우리 `POSITION_TOL=0.01`이 캔의 7 mm 여유보다 헐거운 것이 절반을 설명한다.
+
+미확인 관측 하나: `panda_finger_joint2`의 drive가 `stiffness=0, damping=0,
+max_effort=0`이다(joint1은 400/80/7.2). mimic joint라 drive가 없는 것인지 자산이
+authoring을 빠뜨린 것인지 확인하지 않았다. 두 손가락이 항상 함께 움직이는 것으로
+보아 mimic 쪽이 유력하나, `ParallelFingerGripper`는 둘 다 직접 명령하고 있으므로
+mimic이 맞다면 그 전제부터 틀린 것이다.
 
 ### 이전 조사 기록 (위 원인으로 대체됨)
 

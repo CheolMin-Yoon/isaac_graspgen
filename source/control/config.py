@@ -18,14 +18,26 @@ TCP_OFFSET = 0.0
 # lift height (m) straight up in world frame after closing
 LIFT_HEIGHT = 0.15
 
-# phase transition thresholds
-POSITION_TOL = 0.01     # m, TCP-to-target distance to consider a phase reached
+# Phase transition thresholds.
+#
+# These are set from the task's clearance, not from what the arm finds easy. A
+# 66 mm can inside an 80 mm grip leaves 7 mm a side, so a gate that passes at
+# 10 mm admits a guaranteed miss -- and it did: the arm tracked to 4.3 mm and
+# 0.058 rad, well inside the old gates, and the fingers still closed 14 mm off
+# the can's axis.
+#
+# Orientation is the dominant term, which is not obvious. The fingertips sit
+# 103 mm beyond ``panda_hand``, the frame the IK actually tracks, so an
+# orientation error is levered out to 103 mm x theta at the point that has to
+# clear the can: 0.058 rad became 6.0 mm there, larger than the whole position
+# error. Budget the two together against the 7 mm: 4 mm + 103 mm x 0.025 rad
+# leaves ~1.4 mm of margin.
+POSITION_TOL = 0.004    # m, TCP-to-target distance to consider a phase reached
 # rad, TCP-to-target angle. A phase used to advance on position alone, which
 # let the arm enter approach with the hand still turned away from the grasp:
 # the fingers then swept the object aside and closed on nothing (measured with
 # the Panda, whose 7th DOF lets orientation lag position by hundreds of steps).
-# Matches the tolerance PinkArmIK itself reports "reachable" at.
-ORIENTATION_TOL = 0.15
+ORIENTATION_TOL = 0.025
 SETTLE_STEPS = 30       # consecutive in-tolerance steps before advancing
 CLOSE_STEPS = 90        # steps to hold the close command before lifting
 # A phase gives up when it stops making progress, not when a step budget runs
