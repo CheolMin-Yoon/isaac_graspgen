@@ -135,7 +135,7 @@ from isaacsim.core.api import World  # noqa: E402
 from isaacsim.core.utils.extensions import enable_extension  # noqa: E402
 from isaacsim.core.utils.viewports import set_camera_view  # noqa: E402
 
-from control.grasp_execution import GraspExecutor  # noqa: E402
+from control.grasp_execution import GraspExecutor, report_finger_straddle  # noqa: E402
 from graspgen.pointcloud import sample_fixed  # noqa: E402
 from graspgen.selection import select_executable_grasp  # noqa: E402
 from graspgen.visualization import draw_grasps, draw_pointcloud  # noqa: E402
@@ -345,6 +345,14 @@ def main() -> None:
                                 f"[grasp] target center={object_center.round(4).tolist()} "
                                 f"bottom_z={object_min[2]:.4f}"
                             )
+                            # Whether the fingers are about to straddle the
+                            # object or sweep past it is not visible in world
+                            # coordinates -- a good grasp and a near miss differ
+                            # by a centimetre and look alike. Measure it off the
+                            # two fingers themselves rather than off a frame
+                            # convention: the line between them IS the closing
+                            # direction, whatever the URDF calls that axis.
+                            report_finger_straddle(ik, spec, object_center)
                         if phase == "approach" and grasp_target_path is not None:
                             set_ycb_kinematic(grasp_target_path, False)
                             print(f"[grasp] released dynamic target: {grasp_target_path}")

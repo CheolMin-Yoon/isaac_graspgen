@@ -57,6 +57,49 @@ def rotation_to_wxyz(rot) -> np.ndarray:
     return quat / np.linalg.norm(quat)
 
 
+def report_finger_straddle(ik, spec, object_center) -> None:
+    """Print how the object sits relative to the two fingers.
+
+    Measured off the fingers' own world poses rather than a hand-frame axis
+    convention: the line joining them is the closing direction by construction,
+    so ``lateral`` is the miss distance that decides whether closing catches the
+    object or sweeps past it, and ``depth`` says whether the object is within
+    the pads' reach at all. Both are the questions the joint positions alone
+    cannot answer -- a gripper that closes to zero looks the same whether it
+    missed by a millimetre or by a hand's width.
+    """
+    from isaacsim.core.prims import SingleXFormPrim
+
+    finger_links = [name for name in ik.link_names if "finger" in name.lower()]
+    if len(finger_links) != 2:
+        print(f"[grasp] straddle check skipped: found finger links {finger_links}")
+        return
+
+    positions = [
+        np.asarray(SingleXFormPrim(ik.link_path(name)).get_world_pose()[0], dtype=float)
+        for name in finger_links
+    ]
+    separation = positions[1] - positions[0]
+    span = float(np.linalg.norm(separation))
+    if span < 1e-6:
+        print("[grasp] straddle check skipped: fingers coincide")
+        return
+    closing_axis = separation / span
+    midpoint = 0.5 * (positions[0] + positions[1])
+
+    offset = np.asarray(object_center, dtype=float) - midpoint
+    lateral = float(np.dot(offset, closing_axis))
+    residual = offset - lateral * closing_axis
+    ee_position, _ = ik.ee_pose()
+    depth = float(np.linalg.norm(np.asarray(object_center, dtype=float) - np.asarray(ee_position, dtype=float)))
+    print(
+        f"[grasp] straddle: lateral miss={lateral * 1000:+.1f}mm "
+        f"(along closing axis, 0 = centred), off-axis={float(np.linalg.norm(residual)) * 1000:.1f}mm, "
+        f"finger span={span * 1000:.1f}mm, object depth from hand={depth * 1000:.1f}mm "
+        f"(fingertip reach {spec.gripper.graspgen_depth * 1000:.1f}mm)"
+    )
+
+
 class GraspExecutor:
     """Track a grasp pose through pregrasp/approach/close/lift phases."""
 
@@ -233,6 +276,13 @@ class GraspExecutor:
             print(f"[grasp] gripper {label}: unavailable ({error})")
 
     def _enter(self, phase: str) -> None:
+        # How well the phase being left actually tracked. Without this a lateral
+        # grasp miss cannot be attributed: a 14mm miss means one thing if the
+        # arm was 2mm from its commanded pose and quite another if it was 10mm.
+        print(
+            f"[grasp] {self._phase} tracked to position={self._position_error * 1000:.1f}mm "
+            f"orientation={self._orientation_error:.3f}rad"
+        )
         self._report_gripper(f"entering {phase}")
         self._phase = phase
         self._settle = 0

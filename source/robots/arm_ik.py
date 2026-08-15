@@ -12,6 +12,17 @@ from __future__ import annotations
 import numpy as np
 
 
+# QP task weights. Isaac's official FrankaPinkIKExample uses 5.0 / 0.05 / 5e-3,
+# but that example has no convergence criterion -- it teleoperates a target and
+# never asks whether the tool arrived. We gate phase transitions on orientation,
+# and at a 100:1 position-to-orientation ratio the solver trades away precisely
+# what the gate measures: lift converged to 2.1mm of position while drifting to
+# 0.220 rad, against a 0.150 rad tolerance. Position still leads, by 5:1.
+POSITION_COST = 5.0
+ORIENTATION_COST = 1.0
+POSTURE_COST = 5e-3
+
+
 def _to_numpy(value) -> np.ndarray:
     """Flatten a warp array, torch tensor, or sequence to a 1-D numpy array."""
     if hasattr(value, "numpy"):
@@ -123,9 +134,9 @@ class PinkArmIK:
             robot_joint_space=self._robot_joint_space,
             robot_site_space=self._robot_site_space,
             tool_frame=ee_link_name,
-            position_cost=5.0,
-            orientation_cost=0.05,
-            posture_cost=5e-3,
+            position_cost=POSITION_COST,
+            orientation_cost=ORIENTATION_COST,
+            posture_cost=POSTURE_COST,
             solver="osqp",
             dt=self._dt,
         )
@@ -180,6 +191,10 @@ class PinkArmIK:
     @property
     def ee_path(self) -> str:
         return self._ee_path
+
+    @property
+    def link_names(self) -> list[str]:
+        return list(self._link_names)
 
     def link_path(self, link_name: str) -> str:
         """Resolve any articulation link's prim path by name (e.g. "link6")."""
