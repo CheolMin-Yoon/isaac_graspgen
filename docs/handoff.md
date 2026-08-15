@@ -220,8 +220,27 @@ panda_finger_joint1: -0.0150 (하한 0.0000 아래)   panda_finger_joint2: +0.00
 joint1에만 drive를 authoring한다. 무동력 손가락은 명령 위치를 지키지 못하고 접촉에
 밀려 닫힌다 — 물체가 그리퍼를 닫는 것을 그리퍼가 물체를 잡는 것으로 오독하게 된다.
 `ParallelFingerGripper`가 기동 시 authoring된 gain을 나머지 손가락에 복사하도록 했다
-(`SingleArticulation`에는 gain setter가 없어서 IK와 같은 experimental Articulation API를
-쓴다). 이 수정의 효과는 아직 확인 중이다.
+(런타임 setter 세 개 — `set_gains`, `set_dof_stiffnesses`, `set_max_efforts` — 를 시도했으나
+셋 다 존재하지 않는다. PhysX가 읽는 권위인 USD drive 속성에 직접 쓴다).
+
+적용 확인: `[gripper] powered panda_finger_joint2 from panda_finger_joint1:
+stiffness=400.0 damping=80.0 max_effort=7.2`.
+
+**오라클 모드에서 도달한 최선의 상태** (커밋 `ac87d8d`):
+
+```
+approach tracked to position=1.0mm orientation=0.003rad
+straddle: lateral miss=+0.7mm
+gripper entering lift: measured=0.0349  finger span=69.5mm   ← 66mm 캔을 처음으로 물었다
+phase: lift -> done
+```
+
+그리퍼가 허공이 아니라 물체를 문 것은 이번이 처음이다. 다만 lift 도중 캔이 미끄러져
+빠지고(최종 `bottom_z=-0.0000`, 즉 테이블 위) 손가락은 0까지 닫힌다. 마찰·파지력
+쪽이 다음 후보다 — 손가락 max_effort 7.2 N, YCB 마찰 계수, 접촉 재질을 볼 것.
+
+또한 실행 간 편차가 크다. 같은 설정에서 approach가 통과하기도 하고 8 mm 못 미쳐
+실패하기도 한다. 수직에 가까운 파지가 선택되면 손가락이 캔에 부딪히며 밀어낸다.
 
 ### 이전 조사 기록 (위 원인으로 대체됨)
 
