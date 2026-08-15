@@ -67,6 +67,8 @@ class GraspExecutor:
         self._phase = "idle"
         self._orientation: np.ndarray | None = None
         self._targets: dict[str, np.ndarray] = {}
+        self._approach: np.ndarray | None = None
+        self._best_error_vector: np.ndarray | None = None
         self._settle = 0
         self._phase_steps = 0
         self._stalled = 0
@@ -103,11 +105,13 @@ class GraspExecutor:
             "lift": grasp_pos + np.array([0.0, 0.0, cfg.LIFT_HEIGHT]),
         }
         self._orientation = rotation_to_wxyz(rotation)
+        self._approach = approach / np.linalg.norm(approach)
         self._settle = 0
         self._phase_steps = 0
         self._stalled = 0
         self._best_position_error = float("inf")
         self._best_orientation_error = float("inf")
+        self._best_error_vector = None
         self._phase = "pregrasp"
         self._gripper.open()
 
@@ -152,6 +156,8 @@ class GraspExecutor:
             position_error < self._best_position_error - cfg.STALL_MIN_IMPROVEMENT
             or orientation_error < self._best_orientation_error - cfg.STALL_MIN_IMPROVEMENT
         )
+        if position_error < self._best_position_error:
+            self._best_error_vector = np.asarray(ee_pos, dtype=float) - target
         self._best_position_error = min(self._best_position_error, position_error)
         self._best_orientation_error = min(self._best_orientation_error, orientation_error)
 
@@ -173,6 +179,19 @@ class GraspExecutor:
 
     def _fail(self, reason: str) -> None:
         cfg = self._cfg
+        # Decompose the shortfall along the grasp's own approach axis. A gap
+        # that lies along the approach is a depth/frame problem; one that lies
+        # across it is not, and the distinction rules out half the candidates
+        # without another guess.
+        if self._best_error_vector is not None and self._approach is not None:
+            along = float(np.dot(self._best_error_vector, self._approach))
+            perpendicular = self._best_error_vector - along * self._approach
+            print(
+                f"[grasp] shortfall decomposition: along approach={along * 1000:+.1f}mm, "
+                f"perpendicular={float(np.linalg.norm(perpendicular)) * 1000:.1f}mm, "
+                f"world={np.round(self._best_error_vector * 1000, 1).tolist()}mm "
+                f"(approach axis={np.round(self._approach, 3).tolist()})"
+            )
         print(
             f"[grasp] {self._phase} failed ({reason}) at step {self._phase_steps}; "
             f"best position error={self._best_position_error * 1000:.1f}mm "
