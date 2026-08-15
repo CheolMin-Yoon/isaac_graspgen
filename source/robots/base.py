@@ -67,10 +67,13 @@ class RobotSpec:
     num_arm_dofs: int
     # Bent, nonsingular seed posture applied before reactive pose tracking
     reach_posture: Sequence[float]
-    # Articulation link carrying the wrist camera mount, or None when the asset
-    # has no mount. WristCamera re-poses an existing mount, it does not create
-    # one, so None means no wrist camera and therefore no GraspGen input.
-    wrist_camera_link: str | None
+    # Wrist camera description, or None for an arm that has none (and so
+    # cannot feed GraspGen). Requires a "link" key naming the articulation link
+    # it hangs under; every other key overrides sim.config.CAMERA_CONFIG. The
+    # mount mode lives here rather than in the scene config because it is a
+    # property of the robot's asset: "asset" wraps a RealSense the USD already
+    # references, "pinhole" creates a bare camera prim for a USD with none.
+    wrist_camera: dict | None
     gripper: GripperSpec
     # (spec) -> SingleArticulation, already wrapped for world.scene.add
     spawn: Callable

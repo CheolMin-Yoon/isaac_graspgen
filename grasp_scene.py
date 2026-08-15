@@ -54,6 +54,19 @@ parser.add_argument(
     "안정한지 검사하는 용도 — 종료 시 물체별 이동/회전량을 출력한다.",
 )
 parser.add_argument(
+    "--ycb-only",
+    default=None,
+    help="지정한 이름의 YCB 물체 하나만 스폰한다(예: 005_tomato_soup_can). "
+    "grasp 파이프라인을 단일 물체로 좁혀 볼 때 쓴다.",
+)
+parser.add_argument(
+    "--ycb-radius",
+    type=float,
+    default=None,
+    help="YCB 스폰 반경(m)을 덮어쓴다. 기본 0.70은 Indy7 리치 기준으로 정한 값이라 "
+    "다른 팔에서는 워크스페이스 밖일 수 있다.",
+)
+parser.add_argument(
     "--ycb-collision",
     choices=["convexHull", "convexDecomposition", "sdf", "boundingCube"],
     default=None,
@@ -125,7 +138,7 @@ from control.grasp_execution import GraspExecutor  # noqa: E402
 from graspgen.pointcloud import sample_fixed  # noqa: E402
 from graspgen.selection import select_executable_grasp  # noqa: E402
 from graspgen.visualization import draw_grasps, draw_pointcloud  # noqa: E402
-from sim.camera import WristCamera  # noqa: E402
+from sim.camera import WristCamera, add_dome_light  # noqa: E402
 from sim.ros2 import (  # noqa: E402
     CLOCK_TOPIC,
     JOINT_COMMAND_TOPIC,
@@ -163,6 +176,7 @@ def main() -> None:
         f"control={CONTROL_HZ}Hz substeps={PHYSICS_HZ // RENDERING_HZ}"
     )
     world.scene.add_default_ground_plane()
+    add_dome_light()
 
     robot = world.scene.add(spec.spawn(spec))
     print(
@@ -170,10 +184,22 @@ def main() -> None:
         f"{spec.prim_path} @ {base_position.tolist()}"
     )
 
+    ycb_config = YCB_CONFIG
+    if args.ycb_only is not None:
+        selected = [o for o in YCB_CONFIG["objects"] if str(o["name"]) == args.ycb_only]
+        if not selected:
+            available = [str(o["name"]) for o in YCB_CONFIG["objects"]]
+            raise ValueError(f"--ycb-only '{args.ycb_only}' not in {available}")
+        ycb_config = dict(YCB_CONFIG, objects=selected)
+    if args.ycb_radius is not None:
+        ycb_config = dict(
+            ycb_config, spawn=dict(ycb_config["spawn"], radius=float(args.ycb_radius))
+        )
+
     # Spawned dynamic so the solver, not the placement code, decides the
     # resting pose; settle_ycb pins them afterwards.
     ycb_paths = spawn_ycb(
-        YCB_CONFIG,
+        ycb_config,
         base_position=base_position,
         kinematic=False,
         collision_approximation=args.ycb_collision,
@@ -196,12 +222,13 @@ def main() -> None:
     ik = spec.make_ik(robot, dt=control_dt)
     gripper = spec.make_gripper(robot)
     wrist_camera = None
-    if spec.wrist_camera_link is not None:
+    if spec.wrist_camera is not None:
         camera_config = dict(CAMERA_CONFIG)
+        camera_config.update({k: v for k, v in spec.wrist_camera.items() if k != "link"})
         camera_config["enable_pointcloud"] = args.graspgen
         wrist_camera = WristCamera(
             camera_config,
-            parent_prim=ik.link_path(spec.wrist_camera_link),
+            parent_prim=ik.link_path(spec.wrist_camera["link"]),
             workdir=ROOT_DIR,
         )
         wrist_camera.initialize()
@@ -218,7 +245,7 @@ def main() -> None:
     if args.graspgen and wrist_camera is None:
         raise ValueError(
             f"--graspgen needs a wrist camera, but robot '{spec.name}' has no "
-            "wrist_camera_link. GraspGen is fed from the wrist point cloud."
+            "wrist_camera. GraspGen is fed from the wrist point cloud."
         )
 
     graspgen_client = None
@@ -338,7 +365,7 @@ def main() -> None:
             if graspgen_client is not None and not graspgen_called and step >= args.graspgen_step:
                 target_path = ycb_paths[args.grasp_object_index]
                 grasp_target_path = target_path
-                target_label = str(YCB_CONFIG["objects"][args.grasp_object_index]["name"])
+                target_label = str(ycb_config["objects"][args.grasp_object_index]["name"])
                 object_cloud = wrist_camera.get_object_pointcloud(
                     target_label,
                     world_frame=True,
@@ -383,7 +410,7 @@ def main() -> None:
                             result.confidences,
                             grasp_cloud,
                             gripper_depth=spec.gripper.graspgen_depth,
-                            support_z=float(YCB_CONFIG["spawn"].get("support_z", 0.0)),
+                            support_z=float(ycb_config["spawn"].get("support_z", 0.0)),
                         )
                     best_pose_path = os.path.join(grasp_dir, "best_grasp_world.npy")
                     np.save(best_pose_path, result.grasps[best])

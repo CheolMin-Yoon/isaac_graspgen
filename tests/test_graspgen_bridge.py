@@ -130,8 +130,11 @@ def test_panda_spec_uses_isaacs_own_assets() -> None:
     # would close one and leave the other open.
     assert len(spec.gripper.joint_names) == 2
     assert spec.gripper.make is ParallelFingerGripper
-    # franka.usd has no wrist camera mount, so GraspGen has no input for it.
-    assert spec.wrist_camera_link is None
+    # franka.usd ships no camera, so the wrist camera is created rather than
+    # wrapped from the asset.
+    assert spec.wrist_camera["mode"] == "pinhole"
+    assert spec.wrist_camera["link"] == "panda_hand"
+    assert get_robot("indy7").wrist_camera["mode"] == "asset"
 
 
 def test_single_joint_gripper_rejects_a_two_finger_spec() -> None:

@@ -38,7 +38,9 @@ SPEC = RobotSpec(
     ee_link_name="tcp",
     num_arm_dofs=6,
     reach_posture=(0.0, 0.8, -1.6, 0.0, -0.8, 0.0),
-    wrist_camera_link="link6",
+    # The d455 mount and its rsd455.usd reference are baked into ROBOT_USD
+    # under link6; WristCamera only re-poses that mount.
+    wrist_camera={"link": "link6", "mode": "asset"},
     gripper=ROBOTIQ_2F_140,
     spawn=spawn,
 )

@@ -1,4 +1,19 @@
-"""Indy7 wrist camera helper."""
+"""Wrist camera helper.
+
+Two mounting modes, because the two arms differ in what their USD provides:
+
+``asset``
+    The robot USD already references a RealSense (Indy7's ``link6/d455``).
+    This wraps the existing color/depth camera prims and only re-poses the
+    mount. Depth comes from the RTX stereo pipeline, so it carries realistic
+    sensor noise — see ``docs/depth-sensor-noise.md``.
+
+``pinhole``
+    The USD has no camera at all (Isaac's ``franka.usd``). A plain camera prim
+    is created under the wrist link instead, the way IsaacLab's Franka
+    visuomotor task does. Depth is ``distance_to_image_plane`` — geometrically
+    exact and noise-free, which is an easier input than the real sensor gives.
+"""
 
 from __future__ import annotations
 
@@ -15,14 +30,60 @@ except ImportError:
     _HAS_PIL = False
 
 
-class WristCamera:
-    """Wrap the D455 camera already referenced under the Indy7 wrist (``link6/d455``
-    in the spawned USD) and save RGB/depth frames.
+def _author_pinhole_optics(prim_path, resolution, focal_length, horizontal_aperture) -> None:
+    """Author camera optics on the USD prim, before anything renders through it.
 
-    The rsd455.usd reference and its mount transform are baked into the USD
-    asset itself, so this only re-poses the mount and wraps the resulting
-    color/depth camera prims — it never authors a new reference.
+    Both apertures are written together and kept consistent with the pixel
+    aspect ratio. Isaac otherwise notices the mismatch and rewrites
+    verticalAperture itself, and that rewrite lands on a live camera — which
+    segfaults the RTX renderer. IsaacLab avoids this by configuring optics at
+    spawn time (PinholeCameraCfg) rather than mutating a running camera; this
+    is the same thing done directly on the prim.
     """
+    if focal_length is None and horizontal_aperture is None:
+        return
+
+    from pxr import UsdGeom
+
+    from isaacsim.core.utils.stage import get_current_stage
+
+    prim = get_current_stage().GetPrimAtPath(str(prim_path))
+    if not prim.IsValid():
+        UsdGeom.Camera.Define(get_current_stage(), str(prim_path))
+        prim = get_current_stage().GetPrimAtPath(str(prim_path))
+    camera = UsdGeom.Camera(prim)
+
+    if focal_length is not None:
+        camera.CreateFocalLengthAttr().Set(float(focal_length))
+    if horizontal_aperture is not None:
+        width, height = int(resolution[0]), int(resolution[1])
+        horizontal = float(horizontal_aperture)
+        camera.CreateHorizontalApertureAttr().Set(horizontal)
+        camera.CreateVerticalApertureAttr().Set(horizontal * height / width)
+
+
+def add_dome_light(prim_path: str = "/World/domeLight", intensity: float = 1000.0) -> str:
+    """Author a dome light so cameras have something to see.
+
+    Neither ``add_default_ground_plane()`` nor the Panda asset brings a light,
+    and an unlit RTX render is not merely dark — the depth annotator returns no
+    finite pixels either, so a missing light reads exactly like a camera aimed
+    at the void. The Indy7 asset happens to carry its own light, which is why
+    this went unnoticed while it was the only robot.
+    """
+    from pxr import Sdf, UsdLux
+
+    from isaacsim.core.utils.stage import get_current_stage
+
+    stage = get_current_stage()
+    existing = stage.GetPrimAtPath(prim_path)
+    if not existing.IsValid():
+        UsdLux.DomeLight.Define(stage, Sdf.Path(prim_path)).CreateIntensityAttr(float(intensity))
+    return prim_path
+
+
+class WristCamera:
+    """Wrist-mounted RGB-D camera, either wrapped from the USD or created here."""
 
     def __init__(self, cfg: dict, parent_prim: str, workdir: str = ".") -> None:
         from pxr import UsdPhysics
@@ -30,6 +91,9 @@ class WristCamera:
         from isaacsim.core.utils.stage import get_current_stage
 
         self._cfg = cfg
+        self._mode = str(cfg.get("mode", "asset"))
+        if self._mode not in ("asset", "pinhole"):
+            raise ValueError(f"unknown wrist camera mode {self._mode!r}; expected asset or pinhole")
         self._every = int(cfg.get("capture_every", 60))
         self._out_dir = os.path.join(workdir, cfg.get("output_dir", "output/camera"))
         self._rgb_dir = os.path.join(self._out_dir, "rgb")
@@ -40,27 +104,42 @@ class WristCamera:
         if self._capture_depth:
             os.makedirs(self._depth_dir, exist_ok=True)
 
-        prim_name = cfg.get("prim_name", "d455")
+        resolution = tuple(cfg.get("resolution", [640, 480]))
+        prim_name = cfg.get("prim_name", "d455" if self._mode == "asset" else "wrist_cam")
         self._mount_path = f"{parent_prim.rstrip('/')}/{prim_name}"
 
-        asset_root = cfg.get("asset_root_name", "RSD455")
+        if self._mode == "pinhole":
+            # No mount to find and no separate depth sensor: one camera prim is
+            # created here and serves both RGB and distance_to_image_plane.
+            self._prim_path = self._mount_path
+            self._depth_prim_path = None
+            _author_pinhole_optics(
+                self._prim_path,
+                resolution=resolution,
+                focal_length=cfg.get("focal_length"),
+                horizontal_aperture=cfg.get("horizontal_aperture"),
+            )
+            self._camera = Camera(prim_path=self._prim_path, resolution=resolution)
+            self._depth_camera = None
+        else:
+            asset_root = cfg.get("asset_root_name", "RSD455")
 
-        # The RealSense asset ships with RigidBodyAPI enabled (free-falls under
-        # gravity by default). It isn't welded to the TCP via a physics joint,
-        # so it must be disabled to follow the parent transform kinematically.
-        rb_prim = get_current_stage().GetPrimAtPath(f"{self._mount_path}/{asset_root}")
-        if rb_prim.IsValid() and rb_prim.HasAPI(UsdPhysics.RigidBodyAPI):
-            UsdPhysics.RigidBodyAPI(rb_prim).GetRigidBodyEnabledAttr().Set(False)
-        color_cam = cfg.get("color_camera", "Camera_OmniVision_OV9782_Color")
-        depth_cam = cfg.get("depth_camera", "Camera_Pseudo_Depth")
-        self._prim_path = f"{self._mount_path}/{asset_root}/{color_cam}"
-        self._depth_prim_path = f"{self._mount_path}/{asset_root}/{depth_cam}"
-        self._camera = Camera(prim_path=self._prim_path, resolution=tuple(cfg.get("resolution", [640, 480])))
-        self._depth_camera = (
-            Camera(prim_path=self._depth_prim_path, resolution=tuple(cfg.get("resolution", [640, 480])))
-            if self._capture_depth
-            else None
-        )
+            # The RealSense asset ships with RigidBodyAPI enabled (free-falls under
+            # gravity by default). It isn't welded to the TCP via a physics joint,
+            # so it must be disabled to follow the parent transform kinematically.
+            rb_prim = get_current_stage().GetPrimAtPath(f"{self._mount_path}/{asset_root}")
+            if rb_prim.IsValid() and rb_prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                UsdPhysics.RigidBodyAPI(rb_prim).GetRigidBodyEnabledAttr().Set(False)
+            color_cam = cfg.get("color_camera", "Camera_OmniVision_OV9782_Color")
+            depth_cam = cfg.get("depth_camera", "Camera_Pseudo_Depth")
+            self._prim_path = f"{self._mount_path}/{asset_root}/{color_cam}"
+            self._depth_prim_path = f"{self._mount_path}/{asset_root}/{depth_cam}"
+            self._camera = Camera(prim_path=self._prim_path, resolution=resolution)
+            self._depth_camera = (
+                Camera(prim_path=self._depth_prim_path, resolution=resolution)
+                if self._capture_depth
+                else None
+            )
 
         self._saved = 0
         self._viewport_window = None
@@ -71,14 +150,17 @@ class WristCamera:
         if self._depth_camera is not None:
             self._depth_camera.initialize()
 
-        # Internal camera offsets are baked into the USD, so mount the
-        # reference root instead of individual cameras.
+        # In asset mode the internal camera offsets are baked into the USD, so
+        # the reference root is mounted rather than the individual cameras. In
+        # pinhole mode the created prim *is* the camera, so the same local pose
+        # applies directly to it.
         from isaacsim.core.prims import SingleXFormPrim
 
         SingleXFormPrim(self._mount_path).set_local_pose(
             translation=np.asarray(self._cfg.get("mount_translation", [0.0, 0.0, 0.08]), dtype=float),
             orientation=np.asarray(self._cfg.get("mount_orientation", [0.0, 1.0, 0.0, 0.0]), dtype=float),
         )
+
 
         clip = self._cfg.get("clipping_range", [0.01, 5.0])
         self._camera.set_clipping_range(near_distance=float(clip[0]), far_distance=float(clip[1]))

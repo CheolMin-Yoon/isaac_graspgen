@@ -69,6 +69,12 @@ class GraspExecutor:
         self._targets: dict[str, np.ndarray] = {}
         self._settle = 0
         self._phase_steps = 0
+        # Best errors seen in the current phase, so a failure can say which
+        # gate it failed and how close it got. "Did not reach the pose" is not
+        # actionable; "position was within 2mm but orientation plateaued at
+        # 0.6 rad" points straight at the cause.
+        self._best_position_error = float("inf")
+        self._best_orientation_error = float("inf")
 
     @property
     def phase(self) -> str:
@@ -109,6 +115,13 @@ class GraspExecutor:
         cfg = self._cfg
         self._phase_steps += 1
         if self._phase_steps > cfg.TIMEOUT_STEPS:
+            print(
+                f"[grasp] {self._phase} failed after {cfg.TIMEOUT_STEPS} steps; "
+                f"best position error={self._best_position_error * 1000:.1f}mm "
+                f"(tol {cfg.POSITION_TOL * 1000:.0f}mm), "
+                f"best orientation error={self._best_orientation_error:.3f}rad "
+                f"(tol {cfg.ORIENTATION_TOL:.3f}rad)"
+            )
             self._phase = "failed"
             return self._phase
 
@@ -125,9 +138,21 @@ class GraspExecutor:
         else:
             self._gripper.open()
 
-        ee_pos, _ = self._ik.ee_pose()
-        error = float(np.linalg.norm(np.asarray(ee_pos, dtype=float) - target))
-        self._settle = self._settle + 1 if error < cfg.POSITION_TOL else 0
+        ee_pos, ee_quat = self._ik.ee_pose()
+        position_error = float(np.linalg.norm(np.asarray(ee_pos, dtype=float) - target))
+        # Orientation counts too: reaching the grasp point with the hand still
+        # rotated away is not reaching the grasp.
+        orientation_error = 2.0 * np.arccos(
+            np.clip(
+                abs(float(np.dot(self._orientation, np.asarray(ee_quat, dtype=float)))),
+                0.0,
+                1.0,
+            )
+        )
+        self._best_position_error = min(self._best_position_error, position_error)
+        self._best_orientation_error = min(self._best_orientation_error, orientation_error)
+        reached = position_error < cfg.POSITION_TOL and orientation_error < cfg.ORIENTATION_TOL
+        self._settle = self._settle + 1 if reached else 0
 
         if self._settle >= cfg.SETTLE_STEPS:
             if self._phase == "pregrasp":
@@ -142,3 +167,5 @@ class GraspExecutor:
         self._phase = phase
         self._settle = 0
         self._phase_steps = 0
+        self._best_position_error = float("inf")
+        self._best_orientation_error = float("inf")

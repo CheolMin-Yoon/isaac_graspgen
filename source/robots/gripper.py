@@ -193,8 +193,12 @@ ROBOTIQ_2F_140 = GripperSpec(
 PANDA_HAND = GripperSpec(
     name="panda_hand",
     joint_names=("panda_finger_joint1", "panda_finger_joint2"),
-    # Half-width per finger, from Isaac's official Franka PINK example.
-    open_position=0.035,
+    # Half-width per finger. The Isaac example uses 0.035 for its 5 cm cubes;
+    # this is the joint's full 0.04 because YCB cans are 66 mm across, and at
+    # 0.035 the 70 mm opening leaves 2 mm a side — less than the approach's own
+    # orientation tolerance, so the fingers hit the can instead of straddling
+    # it and the arm stalls short of the grasp.
+    open_position=0.04,
     # Isaac's FrankaPinkIKExample offsets panda_hand by this to reach the
     # fingertip midpoint.
     graspgen_depth=0.1034,

@@ -20,6 +20,16 @@ LIFT_HEIGHT = 0.15
 
 # phase transition thresholds
 POSITION_TOL = 0.01     # m, TCP-to-target distance to consider a phase reached
+# rad, TCP-to-target angle. A phase used to advance on position alone, which
+# let the arm enter approach with the hand still turned away from the grasp:
+# the fingers then swept the object aside and closed on nothing (measured with
+# the Panda, whose 7th DOF lets orientation lag position by hundreds of steps).
+# Matches the tolerance PinkArmIK itself reports "reachable" at.
+ORIENTATION_TOL = 0.15
 SETTLE_STEPS = 30       # consecutive in-tolerance steps before advancing
 CLOSE_STEPS = 90        # steps to hold the close command before lifting
-TIMEOUT_STEPS = 600     # per-phase step budget before aborting as unreachable
+# Per-phase step budget. This is a liveness guard against a target that can
+# never be reached, not a performance target — set it well above how long a
+# slow-but-converging arm actually takes rather than tuning the controller to
+# fit it.
+TIMEOUT_STEPS = 1800

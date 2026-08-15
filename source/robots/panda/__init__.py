@@ -41,7 +41,43 @@ SPEC = RobotSpec(
     # Official example's nominal reach posture, arm joints only — the finger
     # entries in that dict belong to the gripper.
     reach_posture=(0.012, -0.568, 0.0, -2.811, 0.0, 3.037, 0.741),
-    wrist_camera_link=None,
+    # franka.usd ships no camera, so one is created under panda_hand.
+    #
+    # The orientation is a 180 degree flip about X, not IsaacLab's offset
+    # quaternion: IsaacLab's CameraCfg values are expressed in its own ROS
+    # camera convention and are converted by its machinery, so dropping the raw
+    # numbers into a USD local pose aims the camera at the sky. Measured over
+    # the candidates, the ROS-derived quaternions return 0% finite depth while
+    # this returns 100%.
+    #
+    # A USD camera looks along its local -z, so the flip points it along
+    # panda_hand's +z — the direction the fingers close toward. Mounted at the
+    # hand origin it sees nothing but its own fingers, so it is offset 10 cm to
+    # the side and pitched 20 degrees back toward the grasp region. This is
+    # X180 composed with a 20 degree rotation about Y.
+    #
+    # Chosen by measuring how many instance-mask pixels the target occupies,
+    # not by eye: at the reach posture this mount gives 43k target pixels while
+    # the un-pitched variants give zero. That count is what decides whether
+    # GraspGen gets an input at all.
+    #
+    # Optics are IsaacLab's Franka visuomotor values, which carry no frame
+    # convention and so transfer directly.
+    wrist_camera={
+        "link": "panda_hand",
+        "mode": "pinhole",
+        "prim_name": "wrist_cam",
+        "mount_translation": (0.10, 0.0, -0.05),
+        "mount_orientation": (0.0, 0.98481, 0.0, 0.17365),
+        "focal_length": 24.0,
+        "horizontal_aperture": 20.955,
+        "clipping_range": [0.05, 3.0],
+        # DLSS renders at half resolution internally and refuses inputs below
+        # 300 px; at 640x480 that is 320x240, and the renderer was crashing
+        # while reconfiguring around it. 800x600 keeps the DLSS input at
+        # 400x300, on the legal side of that limit.
+        "resolution": [800, 600],
+    },
     gripper=PANDA_HAND,
     spawn=spawn,
 )
