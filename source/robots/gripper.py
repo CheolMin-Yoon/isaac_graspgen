@@ -119,9 +119,16 @@ class ParallelFingerGripper:
             return
 
         lowers = []
-        for index in self._joint_indices:
+        for index, name in zip(self._joint_indices, spec.joint_names):
             properties = articulation.dof_properties[index]
             lowers.append(float(properties["lower"]))
+            # A finger that will not move is either unpowered or out of effort,
+            # and the two look identical from the joint position alone.
+            print(
+                f"[gripper] {name} @ {index} limits=[{properties['lower']:.4f}, "
+                f"{properties['upper']:.4f}] stiffness={properties['stiffness']:.1f} "
+                f"damping={properties['damping']:.1f} max_effort={properties['maxEffort']:.1f}"
+            )
         # A parallel-jaw hand closes toward its lower limit, unlike the
         # Robotiq's rotary finger joint which closes toward its upper limit.
         self.closed_position = max(lowers)

@@ -82,7 +82,52 @@ GraspGen ZMQ 연결의 구현 범위, 실행법, 실제 검증 결과와 현재 
 - `--ycb-radius 0.55`에서 pregrasp 자세에 도달한다. 기본 0.70은 Indy7 리치
   기준 값이라 Panda에서는 pregrasp 자세부터 실패한다.
 
-막혀 있는 지점: **approach 단계**. 마지막 측정은
+### 근본 원인 확인: PINK가 관절 한계 위반으로 침묵한다 (2026-08-15)
+
+**찾았다.** 정체의 원인은 파지 기하도 접촉 물리도 아니었다.
+
+```
+PINK solve_ik failed: Joint 7 violates configuration limits 0.0 <= 0.04000313580036163 <= 0.04
+```
+
+`PANDA_HAND.open_position = 0.04`는 `panda_finger_joint`의 **상한과 정확히 같다**.
+PhysX는 관절 한계를 3e-6 rad 정도 일상적으로 넘기는데, PINK는 계측된 configuration이
+모델 한계 안에 있다고 **단언**하므로 `solve_ik`가 예외를 던진다. Isaac의
+`PinkIKController.forward()`는 이를 `carb.log_warn`으로만 남기고 `None`을 반환하고,
+우리 `go_to`는 `None`이면 아무 목표도 쓰지 않는다. 결과적으로 **팔에 명령이 전혀
+나가지 않고 그 자리에 얼어붙는다.** Kit이 쏟아내는 수천 줄 경고에 묻혀 보이지 않았다.
+
+측정 근거 (`scratchpad/ikdiag1.log`):
+
+- lift 단계 241 스텝, `solve_ik` 실패 **241회** — 한 번도 명령이 나가지 않았다.
+- `FK(commanded)`는 target에서 150.0 mm, `live TCP`는 `FK(commanded)`에서 0.7 mm.
+  즉 **플랜트는 명령을 정확히 추종하고 있었고, 명령 자체가 갱신되지 않았다.**
+  `LIFT_HEIGHT=0.15`와 150.0 mm가 일치한다 — 팔이 lift에서 한 톨도 안 움직였다.
+- 관절 한계 여유: 팔 7축 모두 0.09 rad 이상, `panda_finger_joint1/2`만 **여유 0.0000**.
+
+**이것이 일곱 번의 반증을 전부 설명한다.** 그리퍼 폭·마찰·솔버 반복·스폰 반경을
+바꿔도 오차가 23.9 / 26.1 / 27.7 / 30.0 mm로 "상수처럼" 남았던 이유는, 실패가 씬의
+어떤 물리량과도 무관하게 **손가락이 상한을 부동소수점 오차만큼 넘는 순간 IK 전체가
+멈추는** 데 있었기 때문이다. 멈춘 위치가 매번 조금씩 달랐던 것은 침묵이 시작된
+시점이 달랐던 것뿐이다. `open_position`을 0.035에서 0.04로 올린 것은 효과가 없던
+게 아니라 **상황을 확정적으로 악화시켰다** — 여유 5 mm를 0으로 만들었다.
+
+적용한 수정 (`source/robots/arm_ik.py`):
+
+1. PINK에 넘기기 전에 계측 관절값을 모델 한계 안으로 클램프한다(여유 1e-4).
+   플랜트 계측이 URDF 한계를 epsilon 벗어나는 것은 정상이며, 그것을 하드 제약
+   QP에 그대로 넣은 배선이 버그였다.
+2. `desired_state`가 `None`이면 연속 실패를 세어 `[ik] solver returned no command
+   ... the arm is NOT being driven`를 찍는다. 명령을 멈춘 컨트롤러가 조용한 상황을
+   다시 만들지 않는다.
+
+부수 관측: 실패 시점에 손가락이 0.0400(완전 개방)이었다 — close 단계를 90스텝
+지났는데도. 그리퍼 close가 실제로 먹었는지 확인하려고 위상 전이마다
+`target / measured / effort`를 찍게 했다.
+
+### 이전 조사 기록 (위 원인으로 대체됨)
+
+막혀 있던 지점: **approach 단계**. 당시 측정은
 
 ```
 best position error   = 26.1mm (tol 10mm)   실패

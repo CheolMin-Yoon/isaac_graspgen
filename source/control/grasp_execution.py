@@ -78,6 +78,11 @@ class GraspExecutor:
         # 0.6 rad" points straight at the cause.
         self._best_position_error = float("inf")
         self._best_orientation_error = float("inf")
+        # Best-ever and current are different questions. A phase that touched
+        # the target once and then drifted reports a passing "best" while
+        # failing, which reads as a contradiction unless both are printed.
+        self._position_error = float("inf")
+        self._orientation_error = float("inf")
 
     @property
     def phase(self) -> str:
@@ -156,6 +161,8 @@ class GraspExecutor:
             position_error < self._best_position_error - cfg.STALL_MIN_IMPROVEMENT
             or orientation_error < self._best_orientation_error - cfg.STALL_MIN_IMPROVEMENT
         )
+        self._position_error = position_error
+        self._orientation_error = orientation_error
         if position_error < self._best_position_error:
             self._best_error_vector = np.asarray(ee_pos, dtype=float) - target
         self._best_position_error = min(self._best_position_error, position_error)
@@ -192,6 +199,10 @@ class GraspExecutor:
                 f"world={np.round(self._best_error_vector * 1000, 1).tolist()}mm "
                 f"(approach axis={np.round(self._approach, 3).tolist()})"
             )
+        self._report_gripper(f"at {self._phase} failure")
+        target = self._targets.get(self._phase)
+        if target is not None and hasattr(self._ik, "diagnose"):
+            self._ik.diagnose(target, self._orientation)
         print(
             f"[grasp] {self._phase} failed ({reason}) at step {self._phase_steps}; "
             f"best position error={self._best_position_error * 1000:.1f}mm "
@@ -199,9 +210,30 @@ class GraspExecutor:
             f"best orientation error={self._best_orientation_error:.3f}rad "
             f"(tol {cfg.ORIENTATION_TOL:.3f}rad)"
         )
+        print(
+            f"[grasp]   at failure: position={self._position_error * 1000:.1f}mm "
+            f"orientation={self._orientation_error:.3f}rad settle={self._settle}"
+        )
         self._phase = "failed"
 
+    def _report_gripper(self, label: str) -> None:
+        """Print commanded vs measured finger travel.
+
+        A grasp that never closed and a grasp that closed on air look identical
+        from the arm's pose alone, so the width is worth a line at every
+        transition rather than a guess afterwards.
+        """
+        gripper = self._gripper
+        try:
+            print(
+                f"[grasp] gripper {label}: target={gripper.target_position:.4f} "
+                f"measured={gripper.hold_position:.4f} effort={gripper.measured_effort:.3f}"
+            )
+        except Exception as error:  # diagnostics must never break execution
+            print(f"[grasp] gripper {label}: unavailable ({error})")
+
     def _enter(self, phase: str) -> None:
+        self._report_gripper(f"entering {phase}")
         self._phase = phase
         self._settle = 0
         self._phase_steps = 0

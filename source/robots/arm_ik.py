@@ -12,6 +12,13 @@ from __future__ import annotations
 import numpy as np
 
 
+def _to_numpy(value) -> np.ndarray:
+    """Flatten a warp array, torch tensor, or sequence to a 1-D numpy array."""
+    if hasattr(value, "numpy"):
+        value = value.numpy()
+    return np.asarray(value).reshape(-1)
+
+
 class PinkArmIK:
     """Official Isaac Sim PINK controller backed by a checked URDF."""
 
@@ -59,6 +66,36 @@ class PinkArmIK:
         self._wp = wp
         self._pin = pin
         self._spec = spec
+        self._pink_robot = pink_robot
+        self._kinematics_joints = kinematics_joints
+        self._last_command: tuple[np.ndarray, np.ndarray] | None = None
+        self._solver_failures = 0
+
+        # PINK asserts the measured configuration lies inside the model's joint
+        # limits and raises out of solve_ik when it does not. PhysX routinely
+        # overshoots a limit by ~3e-6 rad, and the Panda hand makes that certain
+        # because its open position IS the finger joint's upper limit. The
+        # controller then returns no command at all and the arm freezes in
+        # place, silently, mid-phase. Clamping the estimate is the honest fix:
+        # a plant measurement epsilon outside a URDF limit is still that joint's
+        # limit, and a kinematics model must not be handed an infeasible q.
+        self._clamp_indices: np.ndarray | None = None
+        if pink_robot.model.nq == len(kinematics_joints):
+            margin = 1e-4
+            self._clamp_indices = np.array(
+                [usd_joints.index(name) for name in kinematics_joints], dtype=int
+            )
+            self._clamp_lower = (
+                np.asarray(pink_robot.model.lowerPositionLimit, dtype=float) + margin
+            )
+            self._clamp_upper = (
+                np.asarray(pink_robot.model.upperPositionLimit, dtype=float) - margin
+            )
+        else:
+            print(
+                f"[ik] {spec.name}: nq={pink_robot.model.nq} does not match "
+                f"{len(kinematics_joints)} controlled joints; joint-limit clamping disabled"
+            )
         self._articulation = articulation
         self._exp_robot = exp_robot
         self._num_arm_dofs = num_arm_dofs
@@ -171,10 +208,15 @@ class PinkArmIK:
             self._seed_applied = True
             return False
 
+        measured = _to_numpy(self._exp_robot.get_dof_positions()).astype(np.float32)
+        if self._clamp_indices is not None:
+            measured[self._clamp_indices] = np.clip(
+                measured[self._clamp_indices], self._clamp_lower, self._clamp_upper
+            )
         estimated_state = self._mg.RobotState(
             joints=self._mg.JointState.from_name(
                 robot_joint_space=self._robot_joint_space,
-                positions=(self._robot_joint_space, self._exp_robot.get_dof_positions()),
+                positions=(self._robot_joint_space, self._wp.from_numpy(measured)),
                 velocities=(self._robot_joint_space, self._exp_robot.get_dof_velocities()),
             )
         )
@@ -199,10 +241,33 @@ class PinkArmIK:
             )
         desired_state = self._controller.forward(estimated_state, setpoint_state, self._sim_time)
         if desired_state is not None and desired_state.joints.positions is not None:
+            solution = _to_numpy(desired_state.joints.positions).astype(np.float32)
+            indices = _to_numpy(desired_state.joints.position_indices).astype(int)
+            # Write only the arm. Isaac's bundled Franka model includes the two
+            # finger joints, so the QP solves for them and PINK's posture task
+            # pulls them back to whatever they were at reset — i.e. open. Left
+            # unfiltered, the arm controller and the gripper controller command
+            # the same DOFs every step and the gripper cannot close. The fingers
+            # sit past the tool frame, so dropping them costs the arm nothing.
+            # The constructor already checked the arm leads both joint lists in
+            # the same order, which is what makes this index test valid.
+            arm = indices < self._num_arm_dofs
             self._exp_robot.set_dof_position_targets(
-                positions=desired_state.joints.positions,
-                dof_indices=desired_state.joints.position_indices,
+                positions=self._wp.from_numpy(solution[arm]),
+                dof_indices=indices[arm].tolist(),
             )
+            self._last_command = (solution[arm], indices[arm])
+            self._solver_failures = 0
+        else:
+            # A controller that stops commanding must never do it quietly: PINK
+            # logs its own failure through carb at warning level, which is
+            # indistinguishable from the thousands of lines Kit already prints.
+            self._solver_failures += 1
+            if self._solver_failures in (1, 30) or self._solver_failures % 300 == 0:
+                print(
+                    f"[ik] solver returned no command for {self._solver_failures} "
+                    "consecutive step(s); the arm is NOT being driven"
+                )
         self._sim_time += self._dt
 
         current_position, current_orientation = self.ee_pose()
@@ -211,6 +276,72 @@ class PinkArmIK:
             np.clip(abs(float(np.dot(target_orientation, current_orientation))), 0.0, 1.0)
         )
         return bool(position_error < 0.02 and orientation_error < 0.15)
+
+    def diagnose(self, target_position, target_orientation) -> None:
+        """Report why tracking plateaued: solver, plant, or joint limits.
+
+        Three outcomes are possible and they need different fixes, so the dump
+        separates them instead of leaving another guess to make. FK of the
+        commanded configuration says where the solver *intended* to put the
+        tool; the live pose says where the plant actually went; the per-joint
+        limit margins say whether the solver had anywhere left to go.
+        """
+        print(f"[ik] consecutive solver failures at this point: {self._solver_failures}")
+        if self._last_command is None:
+            print("[ik] diagnose: no command issued yet")
+            return
+
+        pin = self._pin
+        model = self._pink_robot.model
+        data = self._pink_robot.data
+        usd_joints = self._robot_joint_space
+        target_position = np.asarray(target_position, dtype=float)
+
+        actual = np.asarray(self._articulation.get_joint_positions(), dtype=float).reshape(-1)
+        commanded_positions, commanded_indices = self._last_command
+        commanded_full = actual.copy()
+        commanded_full[commanded_indices] = commanded_positions
+
+        lower = np.asarray(model.lowerPositionLimit, dtype=float)
+        upper = np.asarray(model.upperPositionLimit, dtype=float)
+        print("[ik] joint | actual | commanded | lower | upper | margin")
+        for model_index, name in enumerate(self._kinematics_joints):
+            usd_index = usd_joints.index(name)
+            command = commanded_full[usd_index]
+            margin = min(command - lower[model_index], upper[model_index] - command)
+            flag = "  <-- AT LIMIT" if margin < 0.05 else ""
+            print(
+                f"[ik]   {name}: {actual[usd_index]:+.4f} | {command:+.4f} | "
+                f"{lower[model_index]:+.4f} | {upper[model_index]:+.4f} | {margin:.4f}{flag}"
+            )
+
+        tracking = float(np.linalg.norm(commanded_full - actual))
+        if model.nq == len(self._kinematics_joints):
+            q_model = np.array(
+                [commanded_full[usd_joints.index(name)] for name in self._kinematics_joints],
+                dtype=float,
+            )
+            pin.forwardKinematics(model, data, q_model)
+            pin.updateFramePlacements(model, data)
+            frame = data.oMf[model.getFrameId(self._spec.ee_link_name)]
+            commanded_tcp = np.asarray(frame.translation) + np.asarray(
+                self._spec.position, dtype=float
+            )
+            solver_error = float(np.linalg.norm(commanded_tcp - target_position))
+            live_position, _ = self.ee_pose()
+            plant_error = float(np.linalg.norm(np.asarray(live_position) - commanded_tcp))
+            print(
+                f"[ik] solver: FK(commanded) is {solver_error * 1000:.1f}mm from the target; "
+                f"plant: live TCP is {plant_error * 1000:.1f}mm from FK(commanded); "
+                f"joint tracking error={tracking:.4f}rad"
+            )
+            print(
+                f"[ik]   target={np.round(target_position, 4).tolist()} "
+                f"FK(commanded)={np.round(commanded_tcp, 4).tolist()} "
+                f"live={np.round(np.asarray(live_position), 4).tolist()}"
+            )
+        else:
+            print(f"[ik] joint tracking error={tracking:.4f}rad (FK skipped: nq mismatch)")
 
     def reset(self) -> None:
         self._sim_time = 0.0
