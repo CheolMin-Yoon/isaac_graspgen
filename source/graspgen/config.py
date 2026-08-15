@@ -25,7 +25,22 @@ SEED = 0
 MIN_GRIPPER_BASE_Z = 0.10
 MAX_APPROACH_Z = -0.25
 MAX_TOOL_TO_OBJECT_DISTANCE = 0.08
-MIN_OUTWARD_APPROACH = 0.20
+# Heading test for the approach, as a cosine against the outward radial
+# direction, applied only when the approach has a real heading to speak of.
+#
+# The previous form gated the *unnormalised* dot product at 0.20, which coupled
+# the heading requirement to how steeply the grasp came down: a top-down grasp
+# has a horizontal component of about 0.5 whatever its azimuth, so the test
+# demanded it also lean outward by 40 degrees. Measured on one can, that
+# discarded 57 of 60 candidates, and the discarded pool contained a grasp
+# centred to 0.1mm while the best survivor was 6.1mm off.
+#
+# What the gate is actually for is refusing to approach a table-mounted arm's
+# workspace from behind the object. Reject only headings that point back toward
+# the base more than they point away; a grasp coming almost straight down has no
+# meaningful heading, so do not ask it for one.
+MIN_OUTWARD_COS = -0.5
+MIN_HEADING_MAGNITUDE = 0.15
 # m, how far the jaws' centre may sit from the object's midline along the axis
 # they close on. GraspGen's confidence does not rank this: measured on one can,
 # the top-ranked candidate was 22mm off while #2 and #3 were within 5mm, and the

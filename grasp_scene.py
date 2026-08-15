@@ -114,6 +114,11 @@ parser.add_argument("--grasp-num-grasps", type=int, default=graspgen_config.NUM_
 parser.add_argument("--grasp-topk", type=int, default=graspgen_config.TOPK)
 parser.add_argument("--grasp-seed", type=int, default=graspgen_config.SEED)
 parser.add_argument(
+    "--grasp-oracle-centering",
+    action="store_true",
+    help="후보 정렬도를 관측 점군 대신 시뮬레이터의 실제 물체 중심으로 계산한다. 실행 파이프라인(팔·그리퍼·위상기계)만 따로 검증하기 위한 진단용 — 실기에서는 쓸 수 없다.",
+)
+parser.add_argument(
     "--execute-grasp",
     action="store_true",
     help="best grasp pose를 pregrasp→approach→close→lift 순서로 IK 실행 (--graspgen 필요)",
@@ -135,7 +140,11 @@ from isaacsim.core.api import World  # noqa: E402
 from isaacsim.core.utils.extensions import enable_extension  # noqa: E402
 from isaacsim.core.utils.viewports import set_camera_view  # noqa: E402
 
-from control.grasp_execution import GraspExecutor, report_finger_straddle  # noqa: E402
+from control.grasp_execution import (  # noqa: E402
+    GraspExecutor,
+    grasp_pose_reachable,
+    report_finger_straddle,
+)
 from graspgen.pointcloud import sample_fixed  # noqa: E402
 from graspgen.selection import report_candidate_centering, select_executable_grasp  # noqa: E402
 from graspgen.visualization import draw_grasps, draw_pointcloud  # noqa: E402
@@ -434,6 +443,13 @@ def main() -> None:
                             grasp_cloud,
                             gripper_depth=spec.gripper.graspgen_depth,
                             support_z=float(ycb_config["spawn"].get("support_z", 0.0)),
+                            is_reachable=lambda pose: grasp_pose_reachable(ik, pose),
+                            midline_override=(
+                                0.5 * (get_world_bounds(grasp_target_path)[0]
+                                       + get_world_bounds(grasp_target_path)[1])
+                                if args.grasp_oracle_centering and grasp_target_path is not None
+                                else None
+                            ),
                         )
                     best_pose_path = os.path.join(grasp_dir, "best_grasp_world.npy")
                     np.save(best_pose_path, result.grasps[best])
@@ -447,7 +463,7 @@ def main() -> None:
                             f"[grasp] selected index={best} "
                             f"base_clearance={selection['base_clearance']:.4f} "
                             f"approach_z={selection['approach_z']:.4f} "
-                            f"outward={selection['outward_approach']:.4f} "
+                            f"outward_cos={selection['outward_cos']:.4f} "
                             f"tool_distance={selection['tool_distance']:.4f} "
                             f"closing_offset={selection['closing_offset'] * 1000:+.1f}mm"
                         )

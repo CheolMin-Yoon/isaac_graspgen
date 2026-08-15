@@ -292,6 +292,56 @@ class PinkArmIK:
         )
         return bool(position_error < 0.02 and orientation_error < 0.15)
 
+    def reachable(self, target_position, target_orientation) -> bool:
+        """Whether the arm can hold this pose without leaving its joint limits.
+
+        Solved offline against the kinematics model, so a candidate can be
+        rejected before the plant is committed to it. This replaces a heuristic
+        that stood in for reachability by asking the approach to lean outward:
+        measured, that proxy discarded 57 of 60 GraspGen candidates including
+        every well-centred one, while still admitting a near-vertical grasp that
+        drives ``panda_joint6`` past its upper limit. When the arm cannot hold
+        the pose it does not stop politely -- it converges partway, gives up,
+        and sweeps the object off the table on the way out.
+        """
+        pin = self._pin
+        model = self._pink_robot.model
+        data = self._pink_robot.data
+        if model.nq != len(self._kinematics_joints):
+            return True  # cannot check; do not veto on an unverifiable model
+
+        usd_joints = self._robot_joint_space
+        live = np.asarray(self._articulation.get_joint_positions(), dtype=float).reshape(-1)
+        q = np.array(
+            [live[usd_joints.index(name)] for name in self._kinematics_joints], dtype=float
+        )
+        lower = np.asarray(model.lowerPositionLimit, dtype=float)
+        upper = np.asarray(model.upperPositionLimit, dtype=float)
+        q = np.clip(q, lower, upper)
+
+        w, qx, qy, qz = np.asarray(target_orientation, dtype=float)
+        desired = pin.SE3(
+            pin.Quaternion(float(w), float(qx), float(qy), float(qz)).matrix(),
+            np.asarray(target_position, dtype=float) - np.asarray(self._spec.position, dtype=float),
+        )
+        frame_id = model.getFrameId(self._spec.ee_link_name)
+
+        damping = 1e-6
+        for _ in range(200):
+            pin.forwardKinematics(model, data, q)
+            pin.updateFramePlacements(model, data)
+            error = pin.log6(data.oMf[frame_id].actInv(desired)).vector
+            if float(np.linalg.norm(error)) < 1e-4:
+                # Reached the pose; the only remaining question is whether the
+                # configuration that reaches it is one the arm may hold.
+                return bool(np.all(q >= lower - 1e-9) and np.all(q <= upper + 1e-9))
+            jacobian = pin.computeFrameJacobian(model, data, q, frame_id, pin.LOCAL)
+            step = jacobian.T @ np.linalg.solve(
+                jacobian @ jacobian.T + damping * np.eye(6), error
+            )
+            q = np.clip(pin.integrate(model, q, step), lower, upper)
+        return False
+
     def diagnose(self, target_position, target_orientation) -> None:
         """Report why tracking plateaued: solver, plant, or joint limits.
 

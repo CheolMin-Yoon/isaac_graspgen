@@ -57,6 +57,28 @@ def rotation_to_wxyz(rot) -> np.ndarray:
     return quat / np.linalg.norm(quat)
 
 
+def grasp_pose_reachable(ik, grasp_pose, cfg=config) -> bool:
+    """Whether both waypoints of a candidate grasp are inside the arm's limits.
+
+    The pregrasp is checked as well as the grasp: a grasp the arm can hold but
+    cannot be entered from is not executable, and the executor drives through
+    both. Uses the same offsets ``GraspExecutor.start`` will use, so this asks
+    about the poses that will actually be commanded rather than about the raw
+    candidate.
+    """
+    if not hasattr(ik, "reachable"):
+        return True
+    pose = np.asarray(grasp_pose, dtype=float).reshape(4, 4)
+    approach = pose[:3, 2]
+    approach = approach / np.linalg.norm(approach)
+    orientation = rotation_to_wxyz(pose[:3, :3])
+    grasp_position = pose[:3, 3] + (cfg.TCP_OFFSET + cfg.GRASP_DEPTH_OFFSET) * approach
+    return bool(
+        ik.reachable(grasp_position - cfg.PREGRASP_OFFSET * approach, orientation)
+        and ik.reachable(grasp_position, orientation)
+    )
+
+
 def report_finger_straddle(ik, spec, object_center, grasp_pose=None) -> None:
     """Print how the object sits relative to the two fingers.
 

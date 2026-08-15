@@ -132,11 +132,78 @@ class ParallelFingerGripper:
         # A parallel-jaw hand closes toward its lower limit, unlike the
         # Robotiq's rotary finger joint which closes toward its upper limit.
         self.closed_position = max(lowers)
+        self._power_unpowered_fingers(articulation, spec)
         print(
             f"[gripper] {spec.name} joints {spec.joint_names} @ indices "
             f"{self._joint_indices} open={self.open_position:.4f} "
             f"closed={self.closed_position:.4f}"
         )
+
+    def _power_unpowered_fingers(self, articulation, spec: GripperSpec) -> None:
+        """Give every finger the drive gains of the strongest one.
+
+        Isaac's ``franka.usd`` authors a drive on ``panda_finger_joint1`` only:
+        joint 2 comes through with stiffness, damping and max effort all zero.
+        An unpowered finger does not hold its commanded position -- measured, it
+        was pushed shut while the gripper was commanded fully open, which reads
+        as a grasp closing on the object when it is the object closing the
+        gripper. Copying the authored gains is the smallest fix that makes both
+        jaws behave like jaws.
+        """
+        import numpy as np
+
+        properties = [articulation.dof_properties[index] for index in self._joint_indices]
+        stiffness = [float(p["stiffness"]) for p in properties]
+        strongest = int(np.argmax(stiffness))
+        if stiffness[strongest] <= 0.0:
+            print(f"[gripper] {spec.name}: no finger has a drive authored; leaving gains alone")
+            return
+
+        for position, (index, properties_i) in enumerate(zip(self._joint_indices, properties)):
+            if float(properties_i["stiffness"]) > 0.0:
+                continue
+            reference = properties[strongest]
+            try:
+                # SingleArticulation exposes gains only through its controller,
+                # which takes full-DOF arrays rather than an index subset.
+                controller = articulation.get_articulation_controller()
+                kps, kds = controller.get_gains()
+                kps = np.asarray(kps, dtype=float).copy()
+                kds = np.asarray(kds, dtype=float).copy()
+                kps[index] = float(reference["stiffness"])
+                kds[index] = float(reference["damping"])
+                controller.set_gains(kps=kps, kds=kds)
+                # The force limit has no runtime setter on SingleArticulation
+                # (three plausible names were tried and none exist), so write the
+                # USD drive attribute, which is the authority PhysX reads.
+                import omni.usd
+                from pxr import UsdPhysics
+
+                stage = omni.usd.get_context().get_stage()
+                joint_prim = next(
+                    (
+                        prim
+                        for prim in stage.Traverse()
+                        if prim.GetName() == spec.joint_names[position]
+                    ),
+                    None,
+                )
+                if joint_prim is not None:
+                    drive = UsdPhysics.DriveAPI.Get(joint_prim, "linear")
+                    if not drive:
+                        drive = UsdPhysics.DriveAPI.Apply(joint_prim, "linear")
+                    drive.CreateMaxForceAttr().Set(float(reference["maxEffort"]))
+                    drive.CreateStiffnessAttr().Set(float(reference["stiffness"]))
+                    drive.CreateDampingAttr().Set(float(reference["damping"]))
+            except Exception as error:
+                print(f"[gripper] could not power {spec.joint_names[position]}: {error}")
+                continue
+            print(
+                f"[gripper] powered {spec.joint_names[position]} from "
+                f"{spec.joint_names[strongest]}: stiffness={float(reference['stiffness']):.1f} "
+                f"damping={float(reference['damping']):.1f} "
+                f"max_effort={float(reference['maxEffort']):.1f}"
+            )
 
     @property
     def available(self) -> bool:

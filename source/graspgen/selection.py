@@ -7,7 +7,33 @@ import numpy as np
 from . import config
 
 
-def _closing_axis_offset(points: np.ndarray, pose: np.ndarray, tool_center: np.ndarray) -> float:
+def _observed_midline(points: np.ndarray) -> np.ndarray:
+    """Estimate the object's vertical axis from a one-sided point cloud.
+
+    A wrist camera sees one side of an object, so the cloud's mean is pulled
+    toward the camera and the midpoint of its span is only unbiased along
+    directions whose full width is visible. Both were tried and both failed the
+    same way: the estimate agreed with the fingers' measured straddle to 1mm
+    when the closing axis ran across the view and was 20mm out when it ran along
+    it.
+
+    The top of an upright object is different. Viewed from above it is imaged
+    all the way round, so the centroid of the highest points sits on the axis
+    regardless of which side the camera is on. Take the top 20% of the observed
+    height range, and fall back to the whole cloud if too little of it is there
+    to average.
+    """
+    heights = points[:, 2]
+    threshold = float(heights.max() - 0.2 * (heights.max() - heights.min()))
+    top = points[heights >= threshold]
+    if len(top) < max(20, len(points) // 50):
+        return points.mean(axis=0)
+    return top.mean(axis=0)
+
+
+def _closing_axis_offset(
+    points: np.ndarray, pose: np.ndarray, tool_center: np.ndarray, midline_override=None
+) -> float:
     """Signed distance from the jaws' centre to the object's midline.
 
     The closing axis is the pose's y column -- verified in simulation by dotting
@@ -23,9 +49,17 @@ def _closing_axis_offset(points: np.ndarray, pose: np.ndarray, tool_center: np.n
     the point cloud, so it holds outside simulation too.
     """
     closing_axis = np.asarray(pose[:3, 1], dtype=float)
-    projected = points @ closing_axis
-    low, high = np.percentile(projected, [5.0, 95.0])
-    return float(np.dot(tool_center, closing_axis) - 0.5 * (low + high))
+    # ``midline_override`` exists to separate two questions that were being
+    # answered together and neither well: whether the arm and gripper can pick
+    # the object given a sound grasp, and whether a sound grasp can be picked
+    # out of a one-sided point cloud. Passing simulation ground truth answers
+    # the first on its own; it is a diagnostic, not a deployable path.
+    midline = (
+        np.asarray(midline_override, dtype=float)
+        if midline_override is not None
+        else _observed_midline(points)
+    )
+    return float(np.dot(tool_center - midline, closing_axis))
 
 
 def select_executable_grasp(
@@ -35,6 +69,8 @@ def select_executable_grasp(
     *,
     gripper_depth: float,
     support_z: float = 0.0,
+    is_reachable=None,
+    midline_override=None,
 ) -> tuple[int, dict[str, float]]:
     """Choose the best-centred grasp among the table-safe, top-down-ish ones.
 
@@ -69,8 +105,18 @@ def select_executable_grasp(
         tool_distance = float(np.linalg.norm(tool_center - object_center))
         base_clearance = float(base[2] - support_z)
         approach_z = float(approach[2])
-        outward_approach = float(np.dot(approach[:2], outward_xy))
-        closing_offset = _closing_axis_offset(points, pose, tool_center)
+        heading_magnitude = float(np.linalg.norm(approach[:2]))
+        # Below the magnitude threshold the approach is effectively vertical
+        # and its azimuth is noise, so the heading test is skipped rather
+        # than answered with a meaningless number.
+        outward_cos = (
+            float(np.dot(approach[:2], outward_xy)) / heading_magnitude
+            if heading_magnitude >= config.MIN_HEADING_MAGNITUDE
+            else 1.0
+        )
+        closing_offset = _closing_axis_offset(
+            points, pose, tool_center, midline_override=midline_override
+        )
         # Say why a candidate was passed over. These gates are heuristics tuned
         # for one arm and one scene, and a heuristic that silently discards the
         # model's best answer is worse than no heuristic at all -- measured, the
@@ -85,11 +131,15 @@ def select_executable_grasp(
                  approach_z <= config.MAX_APPROACH_Z),
                 (f"tool_distance {tool_distance:.3f}>{config.MAX_TOOL_TO_OBJECT_DISTANCE}",
                  tool_distance <= config.MAX_TOOL_TO_OBJECT_DISTANCE),
-                (f"outward {outward_approach:.3f}<{config.MIN_OUTWARD_APPROACH}",
-                 outward_approach >= config.MIN_OUTWARD_APPROACH),
+                (f"outward_cos {outward_cos:.3f}<{config.MIN_OUTWARD_COS}",
+                 outward_cos >= config.MIN_OUTWARD_COS),
             )
             if not ok
         ]
+        if not failed and is_reachable is not None and not is_reachable(pose):
+            # Checked last because it is the only expensive gate, and only for
+            # candidates the cheap ones already accepted.
+            failed.append("unreachable")
         if failed:
             if rank < 12:
                 print(
@@ -106,7 +156,7 @@ def select_executable_grasp(
                     "base_clearance": base_clearance,
                     "approach_z": approach_z,
                     "tool_distance": tool_distance,
-                    "outward_approach": outward_approach,
+                    "outward_cos": outward_cos,
                     "closing_offset": closing_offset,
                 },
             )
