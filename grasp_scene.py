@@ -137,7 +137,7 @@ from isaacsim.core.utils.viewports import set_camera_view  # noqa: E402
 
 from control.grasp_execution import GraspExecutor, report_finger_straddle  # noqa: E402
 from graspgen.pointcloud import sample_fixed  # noqa: E402
-from graspgen.selection import select_executable_grasp  # noqa: E402
+from graspgen.selection import report_candidate_centering, select_executable_grasp  # noqa: E402
 from graspgen.visualization import draw_grasps, draw_pointcloud  # noqa: E402
 from sim.camera import WristCamera, add_dome_light, set_friction_correlation_distance  # noqa: E402
 from sim.ros2 import (  # noqa: E402
@@ -295,6 +295,7 @@ def main() -> None:
     reset_needed = False
     graspgen_called = False
     grasp_executor = None
+    executed_grasp_pose = None
     grasp_phase = None
     grasp_target_path = None
     try:
@@ -352,7 +353,7 @@ def main() -> None:
                             # two fingers themselves rather than off a frame
                             # convention: the line between them IS the closing
                             # direction, whatever the URDF calls that axis.
-                            report_finger_straddle(ik, spec, object_center)
+                            report_finger_straddle(ik, spec, object_center, executed_grasp_pose)
                         if phase == "approach" and grasp_target_path is not None:
                             set_ycb_kinematic(grasp_target_path, False)
                             print(f"[grasp] released dynamic target: {grasp_target_path}")
@@ -447,7 +448,8 @@ def main() -> None:
                             f"base_clearance={selection['base_clearance']:.4f} "
                             f"approach_z={selection['approach_z']:.4f} "
                             f"outward={selection['outward_approach']:.4f} "
-                            f"tool_distance={selection['tool_distance']:.4f}"
+                            f"tool_distance={selection['tool_distance']:.4f} "
+                            f"closing_offset={selection['closing_offset'] * 1000:+.1f}mm"
                         )
                     if grasp_target_path is not None:
                         # The selection gate and every GraspGen candidate are
@@ -466,9 +468,18 @@ def main() -> None:
                             f"true center={true_center.round(4).tolist()} "
                             f"gap={np.round((cloud_centroid - true_center) * 1000, 1).tolist()}mm"
                         )
+                        if selection is not None:
+                            report_candidate_centering(
+                                result.grasps,
+                                result.confidences,
+                                true_center,
+                                gripper_depth=spec.gripper.graspgen_depth,
+                                selected=best,
+                            )
                     if args.execute_grasp:
                         grasp_executor = GraspExecutor(ik, gripper)
-                        grasp_executor.start(result.grasps[best])
+                        executed_grasp_pose = result.grasps[best]
+                        grasp_executor.start(executed_grasp_pose)
                         grasp_phase = grasp_executor.phase
                         print(f"[grasp] executing best grasp, phase: {grasp_phase}")
                 else:

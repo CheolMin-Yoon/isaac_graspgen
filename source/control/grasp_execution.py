@@ -57,7 +57,7 @@ def rotation_to_wxyz(rot) -> np.ndarray:
     return quat / np.linalg.norm(quat)
 
 
-def report_finger_straddle(ik, spec, object_center) -> None:
+def report_finger_straddle(ik, spec, object_center, grasp_pose=None) -> None:
     """Print how the object sits relative to the two fingers.
 
     Measured off the fingers' own world poses rather than a hand-frame axis
@@ -98,6 +98,18 @@ def report_finger_straddle(ik, spec, object_center) -> None:
         f"finger span={span * 1000:.1f}mm, object depth from hand={depth * 1000:.1f}mm "
         f"(fingertip reach {spec.gripper.graspgen_depth * 1000:.1f}mm)"
     )
+    if grasp_pose is not None:
+        # Settle which column of a GraspGen pose is the closing axis by
+        # comparing against the axis the fingers physically define. Assuming it
+        # is what makes a per-candidate centering report meaningless.
+        pose = np.asarray(grasp_pose, dtype=float).reshape(4, 4)
+        print(
+            "[grasp] closing axis vs grasp pose columns: "
+            f"x={float(np.dot(closing_axis, pose[:3, 0])):+.3f} "
+            f"y={float(np.dot(closing_axis, pose[:3, 1])):+.3f} "
+            f"z={float(np.dot(closing_axis, pose[:3, 2])):+.3f} "
+            "(+/-1 identifies the closing column)"
+        )
 
 
 class GraspExecutor:
