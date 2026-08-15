@@ -20,6 +20,8 @@ hold commands — the executor owns the gripper.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from . import config
@@ -57,6 +59,38 @@ def rotation_to_wxyz(rot) -> np.ndarray:
     return quat / np.linalg.norm(quat)
 
 
+@dataclass(frozen=True)
+class GraspPlan:
+    """The exact Cartesian targets shared by preflight and execution."""
+
+    orientation: np.ndarray
+    approach_axis: np.ndarray
+    positions: dict[str, np.ndarray]
+
+    @classmethod
+    def from_pose(cls, grasp_pose, cfg=config) -> "GraspPlan":
+        pose = np.asarray(grasp_pose, dtype=float)
+        if pose.shape != (4, 4):
+            raise ValueError(f"grasp pose must be 4x4, got {pose.shape}")
+
+        rotation = pose[:3, :3]
+        approach = rotation[:, 2]
+        norm = float(np.linalg.norm(approach))
+        if norm < 1e-9:
+            raise ValueError("grasp pose has a zero-length approach axis")
+        approach = approach / norm
+        grasp = pose[:3, 3] + (cfg.TCP_OFFSET + cfg.GRASP_DEPTH_OFFSET) * approach
+        return cls(
+            orientation=rotation_to_wxyz(rotation),
+            approach_axis=approach,
+            positions={
+                "pregrasp": grasp - cfg.PREGRASP_OFFSET * approach,
+                "approach": grasp,
+                "lift": grasp + np.array([0.0, 0.0, cfg.LIFT_HEIGHT]),
+            },
+        )
+
+
 def grasp_pose_reachable(ik, grasp_pose, cfg=config) -> bool:
     """Whether both waypoints of a candidate grasp are inside the arm's limits.
 
@@ -68,14 +102,10 @@ def grasp_pose_reachable(ik, grasp_pose, cfg=config) -> bool:
     """
     if not hasattr(ik, "reachable"):
         return True
-    pose = np.asarray(grasp_pose, dtype=float).reshape(4, 4)
-    approach = pose[:3, 2]
-    approach = approach / np.linalg.norm(approach)
-    orientation = rotation_to_wxyz(pose[:3, :3])
-    grasp_position = pose[:3, 3] + (cfg.TCP_OFFSET + cfg.GRASP_DEPTH_OFFSET) * approach
+    plan = GraspPlan.from_pose(grasp_pose, cfg)
     return bool(
-        ik.reachable(grasp_position - cfg.PREGRASP_OFFSET * approach, orientation)
-        and ik.reachable(grasp_position, orientation)
+        ik.reachable(plan.positions["pregrasp"], plan.orientation)
+        and ik.reachable(plan.positions["approach"], plan.orientation)
     )
 
 
@@ -142,9 +172,7 @@ class GraspExecutor:
         self._gripper = gripper
         self._cfg = cfg
         self._phase = "idle"
-        self._orientation: np.ndarray | None = None
-        self._targets: dict[str, np.ndarray] = {}
-        self._approach: np.ndarray | None = None
+        self._plan: GraspPlan | None = None
         self._best_error_vector: np.ndarray | None = None
         self._settle = 0
         self._phase_steps = 0
@@ -171,23 +199,7 @@ class GraspExecutor:
 
     def start(self, grasp_pose) -> None:
         """Arm the executor with a world-frame 4x4 grasp pose."""
-        pose = np.asarray(grasp_pose, dtype=float)
-        if pose.shape != (4, 4):
-            raise ValueError(f"grasp pose must be 4x4, got {pose.shape}")
-
-        rotation = pose[:3, :3]
-        position = pose[:3, 3]
-        approach = rotation[:, 2]  # GraspGen convention: +z is the approach axis
-
-        cfg = self._cfg
-        grasp_pos = position + (cfg.TCP_OFFSET + cfg.GRASP_DEPTH_OFFSET) * approach
-        self._targets = {
-            "pregrasp": grasp_pos - cfg.PREGRASP_OFFSET * approach,
-            "approach": grasp_pos,
-            "lift": grasp_pos + np.array([0.0, 0.0, cfg.LIFT_HEIGHT]),
-        }
-        self._orientation = rotation_to_wxyz(rotation)
-        self._approach = approach / np.linalg.norm(approach)
+        self._plan = GraspPlan.from_pose(grasp_pose, self._cfg)
         self._settle = 0
         self._phase_steps = 0
         self._stalled = 0
@@ -214,8 +226,11 @@ class GraspExecutor:
                 self._enter("lift")
             return self._phase
 
-        target = self._targets[self._phase]
-        self._ik.go_to(target, self._orientation)
+        plan = self._plan
+        if plan is None:
+            raise RuntimeError("GraspExecutor.start() must be called before step()")
+        target = plan.positions[self._phase]
+        self._ik.go_to(target, plan.orientation)
         if self._phase in ("close", "lift"):
             self._gripper.close()
         else:
@@ -227,7 +242,7 @@ class GraspExecutor:
         # rotated away is not reaching the grasp.
         orientation_error = 2.0 * np.arccos(
             np.clip(
-                abs(float(np.dot(self._orientation, np.asarray(ee_quat, dtype=float)))),
+                abs(float(np.dot(plan.orientation, np.asarray(ee_quat, dtype=float)))),
                 0.0,
                 1.0,
             )
@@ -267,19 +282,20 @@ class GraspExecutor:
         # that lies along the approach is a depth/frame problem; one that lies
         # across it is not, and the distinction rules out half the candidates
         # without another guess.
-        if self._best_error_vector is not None and self._approach is not None:
-            along = float(np.dot(self._best_error_vector, self._approach))
-            perpendicular = self._best_error_vector - along * self._approach
+        plan = self._plan
+        if self._best_error_vector is not None and plan is not None:
+            along = float(np.dot(self._best_error_vector, plan.approach_axis))
+            perpendicular = self._best_error_vector - along * plan.approach_axis
             print(
                 f"[grasp] shortfall decomposition: along approach={along * 1000:+.1f}mm, "
                 f"perpendicular={float(np.linalg.norm(perpendicular)) * 1000:.1f}mm, "
                 f"world={np.round(self._best_error_vector * 1000, 1).tolist()}mm "
-                f"(approach axis={np.round(self._approach, 3).tolist()})"
+                f"(approach axis={np.round(plan.approach_axis, 3).tolist()})"
             )
         self._report_gripper(f"at {self._phase} failure")
-        target = self._targets.get(self._phase)
+        target = None if plan is None else plan.positions.get(self._phase)
         if target is not None and hasattr(self._ik, "diagnose"):
-            self._ik.diagnose(target, self._orientation)
+            self._ik.diagnose(target, plan.orientation)
         print(
             f"[grasp] {self._phase} failed ({reason}) at step {self._phase_steps}; "
             f"best position error={self._best_position_error * 1000:.1f}mm "

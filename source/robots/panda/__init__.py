@@ -1,15 +1,8 @@
-"""Franka Panda with its own hand, from Isaac's official assets.
+"""Franka Panda spec using Isaac's official arm asset and PINK model.
 
-Unlike the Indy7, nothing here is authored in this repo: the USD, the
-kinematics URDF and the controller gains all come from Isaac Sim 6.0.1. The
-values below are taken from the official ``FrankaPinkIKExample``
-(``exts/isaacsim.robot_motion.pink.examples/.../ik_controller/scenario.py``),
-whose gains happen to be the ones ``PinkArmIK`` already uses.
-
-Known gaps, both tracked in ``robots/panda/README.md``:
-  * ``franka.usd`` carries no wrist camera mount, so ``wrist_camera_link`` is
-    None and ``--graspgen`` is unavailable for this arm.
-  * The GraspGen Franka checkpoints are not downloaded yet.
+The bare ``franka.usd`` has no camera, so this spec adds a calibrated pinhole
+camera under ``panda_hand``. The Panda-hand GraspGen checkpoints remain outside
+this repo and are referenced by ``robots.gripper.PANDA_HAND``.
 """
 
 from __future__ import annotations

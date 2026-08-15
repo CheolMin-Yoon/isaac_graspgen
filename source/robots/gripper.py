@@ -276,9 +276,8 @@ PANDA_HAND = GripperSpec(
     # Isaac's FrankaPinkIKExample offsets panda_hand by this to reach the
     # fingertip midpoint.
     graspgen_depth=0.1034,
-    # NOT downloaded yet — GraspGen publishes a Franka Panda checkpoint, but
-    # /home/frlab/GraspGenModels/checkpoints only holds the Robotiq pair.
-    # scripts/run_graspgen_server.py fails with the missing path until then.
+    # External model assets are intentionally referenced rather than copied
+    # into this repo; the server launcher validates both paths before startup.
     graspgen_gripper_config="/home/frlab/GraspGenModels/checkpoints/graspgen_franka_panda.yml",
     graspgen_generator_checkpoint="/home/frlab/GraspGenModels/checkpoints/graspgen_franka_panda_gen.pth",
     make=ParallelFingerGripper,

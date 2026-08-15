@@ -17,9 +17,10 @@ from graspgen.client import GraspGenClient
 from graspgen.pointcloud import crop_aabb, sample_fixed
 from graspgen.selection import select_executable_grasp
 from graspgen.visualization import grasp_axis_lines
-from control.grasp_execution import GraspExecutor
+from control.grasp_execution import GraspExecutor, GraspPlan, grasp_pose_reachable
 from robots import DEFAULT_ROBOT, available_robots, get_robot
 from robots.gripper import ROBOTIQ_2F_140, ParallelFingerGripper, SingleJointGripper
+from sim.cli import parse_args
 from sim.config import CONTROL_HZ, PHYSICS_HZ, RENDERING_HZ
 
 
@@ -49,6 +50,15 @@ class _RecordingGripper:
         self.commands.append("close")
 
 
+class _RecordingReachability:
+    def __init__(self) -> None:
+        self.positions: list[np.ndarray] = []
+
+    def reachable(self, position, orientation) -> bool:
+        self.positions.append(np.asarray(position, dtype=float))
+        return True
+
+
 def test_timing_contract() -> None:
     assert PHYSICS_HZ == 240
     assert RENDERING_HZ == CONTROL_HZ == 60
@@ -75,6 +85,19 @@ def test_grasp_executor_reaches_lift_done() -> None:
     assert gripper.commands[-1] == "close"
 
 
+def test_reachability_and_execution_share_one_grasp_plan() -> None:
+    pose = np.eye(4)
+    pose[:3, 3] = [0.4, -0.1, 0.2]
+    plan = GraspPlan.from_pose(pose)
+    ik = _RecordingReachability()
+
+    assert grasp_pose_reachable(ik, pose)
+    np.testing.assert_allclose(
+        ik.positions,
+        [plan.positions["pregrasp"], plan.positions["approach"]],
+    )
+
+
 def test_execution_selection_rejects_table_colliding_best_grasp() -> None:
     depth = ROBOTIQ_2F_140.graspgen_depth
     points = np.array([[0.40, 0.0, 0.02], [0.41, 0.0, 0.02]], dtype=np.float32)
@@ -98,7 +121,30 @@ def test_execution_selection_rejects_table_colliding_best_grasp() -> None:
 
     assert index == 1
     assert metrics["approach_z"] == -0.8
-    assert metrics["outward_approach"] == 0.6
+    assert metrics["outward_cos"] == 1.0
+
+
+def test_scene_cli_validates_before_isaac_starts() -> None:
+    args = parse_args(
+        [
+            "--robot",
+            "panda",
+            "--graspgen",
+            "--execute-grasp",
+            "--ycb-only",
+            "005_tomato_soup_can",
+            "--/renderer/multiGpu/enabled=false",
+        ]
+    )
+    assert args.robot == "panda"
+    assert args.execute_grasp
+
+    try:
+        parse_args(["--execute-grasp"])
+    except ValueError as error:
+        assert "requires --graspgen" in str(error)
+    else:
+        raise AssertionError("--execute-grasp without --graspgen must fail before Isaac starts")
 
 
 def test_robot_registry_exposes_indy7_spec() -> None:

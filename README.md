@@ -6,11 +6,10 @@ Isaac Sim 공식 PINK IK, wrist camera capture, GraspGen 연동을 실행하는 
 
 | 로봇 | 그리퍼 | kinematics | wrist camera | GraspGen |
 |---|---|---|---|---|
-| `panda` (기본) | Panda hand | Isaac 번들 `franka` | 없음 | 체크포인트 미확보 |
+| `panda` (기본) | Panda hand | Isaac 번들 `franka` | pinhole | 사용 가능 |
 | `indy7` | Robotiq 2F-140 | 자체 URDF | D455 | 사용 가능 |
 
-Panda는 스폰/IK까지 동작하며 GraspGen 경로는 아직 막혀 있다 — `franka.usd`에
-카메라 마운트가 없고 Franka 체크포인트가 로컬에 없다. 자세한 내용과 추가 절차는
+Panda 단일 캔 pick/lift 기준 설정과 새 로봇 추가 계약은
 [`source/robots/panda/README.md`](source/robots/panda/README.md)를 본다.
 
 Repo: https://github.com/CheolMin-Yoon/isaac_graspgen
@@ -72,7 +71,7 @@ cd ~/isaac_graspgen
 │   └── design/
 │       ├── indy7.md
 │       └── indy7-ik.md
-├── grasp_scene.py    # 엔트리포인트, --robot으로 팔 선택
+├── grasp_scene.py    # SimulationApp bootstrap
 ├── scripts/          # python launchers (run_scene.py, run_graspgen_server.py)
 ├── source/
 │   ├── robots/       # 로봇 레지스트리
@@ -80,9 +79,9 @@ cd ~/isaac_graspgen
 │   │   ├── arm_ik.py     # PinkArmIK (spec 기반, 팔 무관)
 │   │   ├── gripper.py    # SingleJointGripper, ROBOTIQ_2F_140
 │   │   ├── indy7/        # SPEC, spawn.py, assets/
-│   │   └── panda/        # 아직 미구현 — 추가 절차 문서만 있음
+│   │   └── panda/        # SPEC, spawn.py, 로봇 추가 계약
 │   ├── assets/       # 씬 자산 (ycb_overlap)
-│   ├── sim/          # ycb.py, camera.py, ros2.py, config.py
+│   ├── sim/          # CLI/runtime, ycb, camera, ros2, config
 │   ├── control/      # grasp_execution.py, config.py
 │   └── graspgen/     # client.py, pointcloud.py, visualization.py, config.py
 └── output/camera/
@@ -114,6 +113,9 @@ Isaac Sim 내부에 ROS 2 Action Graph를 생성한다. 목표 pose를 주면 TC
 GraspGen 모델은 별도 Conda 환경/ZMQ 서버에 유지하고 Isaac Sim은 point cloud만
 보낸다. `better_pcd`와 `GraspGen` 소스는 수정하지 않는다.
 
+두 Python 런타임의 경로, 의존성 경계, gripper별 실행 조합과 연결 점검은
+[`docs/config/runtime-environments.md`](docs/config/runtime-environments.md)에 정리했다.
+
 > 경로 주의: 업스트림 NVIDIA GraspGen 체크아웃은 `/home/frlab/GraspGen`이고,
 > 이 워크스페이스는 `/home/frlab/isaac_graspgen`이다. 이름이 비슷하지만 서로
 > 다른 저장소이며, 둘은 ZMQ로만 통신한다. 서버 경로는
@@ -132,6 +134,7 @@ GraspGen 모델은 별도 Conda 환경/ZMQ 서버에 유지하고 Isaac Sim은 p
 ```bash
 ./scripts/run_graspgen_server.py
 ./scripts/run_graspgen_server.py --gripper robotiq_2f_140
+./scripts/run_graspgen_server.py --gripper panda_hand
 ```
 
 터미널 2에서 wrist-camera cloud를 Isaac instance mask로 선택한 뒤 2048점으로
@@ -173,14 +176,14 @@ ros2 topic list -t
 ros2 topic echo /indy7/joint_states --once
 ```
 
-카메라는 `SPEC.wrist_camera_link` 아래 RealSense D455 prim을 사용하고(Indy7은
-`link6/d455`), RGB/depth를 60스텝마다 `output/camera/`에 저장한다.
+카메라는 `SPEC.wrist_camera` 계약을 사용한다. Indy7은 `link6/d455`
+자산을 감싸고 Panda는 `panda_hand` 아래 pinhole prim을 만든다.
 
 주요 옵션:
 
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
-| `--robot` | `indy7` | 구동할 로봇, `source/robots` 레지스트리에 등록된 이름 |
+| `--robot` | `panda` | 구동할 로봇, `source/robots` 레지스트리에 등록된 이름 |
 | `--headless` | off | GUI 없이 실행 |
 | `--max-steps` | `0` | N 스텝 후 자동 종료, 0은 무한 |
 | `--wrist-viewport` | off | 별도의 wrist-camera viewport를 열기 |
@@ -192,7 +195,7 @@ ros2 topic echo /indy7/joint_states --once
 | `--graspgen-step` | `180` | inference를 실행할 simulation step |
 | `--grasp-point-count` | `2048` | GraspGen에 전송할 point 수 |
 | `--grasp-num-grasps` | `200` | diffusion grasp sample 수 |
-| `--grasp-topk` | `20` | 반환 및 표시할 상위 grasp 수 |
+| `--grasp-topk` | `60` | 반환 및 표시할 상위 grasp 수 |
 | `--execute-grasp` | off | best grasp를 pregrasp→approach→close→lift로 IK 실행 (`--graspgen` 필요) |
 
 GraspGen 연결/실행 기본값은 `source/graspgen/config.py`, grasp 실행 파라미터는

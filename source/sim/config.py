@@ -87,8 +87,8 @@ YCB_CONFIG = {
 
 CAMERA_CONFIG = {
     # The d455 mount and its rsd455.usd reference are already baked into the
-    # robot USD under ``spec.wrist_camera_link`` — WristCamera only re-poses
-    # the mount and wraps it.
+    # Defaults for an asset-backed camera. ``RobotSpec.wrist_camera`` may
+    # override these or request a programmatically created pinhole camera.
     "prim_name": "d455",
     "asset_root_name": "RSD455",
     "color_camera": "Camera_OmniVision_OV9782_Color",
