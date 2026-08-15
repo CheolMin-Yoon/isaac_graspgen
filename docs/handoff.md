@@ -94,7 +94,43 @@ best orientation error= 0.122rad (tol 0.150) 통과
 있다는 뜻이다. 즉 팔이 못 뻗는 게 아니라 **물체에 막힌 것**이다. 캔 지름
 66 mm에 그리퍼 개구가 70 mm(`open_position=0.035`)라 편측 여유 2 mm뿐이었고,
 이는 approach의 자세 허용 오차(7도)보다 작다. `open_position`을 관절 한계인
-0.04(개구 80 mm)로 올려두었으나 **아직 검증하지 못했다.**
+0.04(개구 80 mm)로 올렸으나 **효과가 없었다** — 오차가 26.1 mm에서 30.0 mm로
+사실상 그대로였다. 그리퍼 개구 폭은 원인이 아니다.
+
+IsaacLab 실측 대조로 반증된 가설:
+
+- **"Panda를 바닥에 놓은 배치가 문제"** — 아니다. IsaacLab도 Franka 베이스가
+  Z=0이고 물체는 Z=0.0203이다(`stack_env_cfg.py:46-57`, `stack_joint_pos_env_cfg.py:118`).
+  테이블 상판이 Z=0이고 ground plane을 Z=-1.05로 내려서 로봇이 바닥 충돌
+  지오메트리를 보지 않게 할 뿐, 물체는 베이스와 같은 평면에 있다. 우리 Z 배치는
+  틀리지 않았다. 다만 우리는 로봇 바로 아래에 실제 ground plane 충돌체가 있다.
+
+다음에 볼 후보 (IsaacLab이 명시적으로 바꾸는 값들, 우리는 기본값):
+
+- **`friction_correlation_distance`**: IsaacLab은 0.025 → **0.00625**로 4배 줄인다
+  (`stack_env_cfg.py:172-177`). 기본값에서는 작은 물체의 접촉 패치가 단일 friction
+  anchor로 뭉쳐져 **손가락 사이에서 미끄러지거나 돌아나간다.** 우리 증상이 정확히
+  "물체가 밀려남"이므로 가장 유력하다.
+- **물체 solver iteration**: IsaacLab은 물체에 16/1을 준다
+  (`stack_joint_pos_env_cfg.py:106-113`). 우리는 로봇에만 주고 YCB에는 안 준다.
+- **Franka USD가 다르다**: IsaacLab은 `{ISAACLAB_NUCLEUS_DIR}/Robots/FrankaEmika/
+  panda_instanceable.usd`를 쓴다(`franka.py:28`). 우리가 쓰는
+  `/Isaac/Robots/FrankaRobotics/FrankaPanda/franka.usd`는 `Gripper`/`Mesh`
+  variant set이 있고, 선택하지 않으면 기본 variant의 손가락 충돌 메시가 적용된다
+  (`franka_pick_up.py:57-58`은 `AlternateFinger`/`Quality`를 명시 선택한다).
+- **High-PD 변형**: IK 태스크는 `FRANKA_PANDA_HIGH_PD_CFG`(`disable_gravity=True`,
+  어깨/전완 stiffness 400 / damping 80)를 쓴다. IK 추종 정확도에 직접 영향.
+- **TCP 프레임 불일치**: IsaacLab 내부에서도 IK가 구동하는 프레임(panda_hand +0.107)과
+  파지 판정 프레임(+0.1034)이 3.6 mm 다르다. 우리는 `graspgen_depth=0.1034`,
+  `TCP_OFFSET=0`으로 panda_hand를 직접 구동한다. 상수 standoff의 원인이 될 수 있다.
+
+크래시 A/B (실행 간격 10초 고정):
+
+- `--graspgen` 없이 120스텝: **6/6 성공**
+- `--graspgen` 포함 4000스텝: **3/4 크래시**
+
+간격은 요인이 아니다. GraspGen 서버(GPU 상주 약 844 MB)와의 경합이 유력하나
+서버를 분리한 대조 실험은 아직 못 했다.
 
 ## Isaac Sim 간헐적 크래시 (미해결, 최대 병목)
 
