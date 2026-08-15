@@ -41,6 +41,10 @@ SPEC = RobotSpec(
     # Official example's nominal reach posture, arm joints only — the finger
     # entries in that dict belong to the gripper.
     reach_posture=(0.012, -0.568, 0.0, -2.811, 0.0, 3.037, 0.741),
+    # Same values for now: the wrist camera mount was measured at this posture
+    # and sees the workspace from it. Separate field so moving one does not
+    # silently move the other.
+    observation_posture=(0.012, -0.568, 0.0, -2.811, 0.0, 3.037, 0.741),
     # franka.usd ships no camera, so one is created under panda_hand.
     #
     # The orientation is a 180 degree flip about X, not IsaacLab's offset

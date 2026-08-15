@@ -67,6 +67,13 @@ class RobotSpec:
     num_arm_dofs: int
     # Bent, nonsingular seed posture applied before reactive pose tracking
     reach_posture: Sequence[float]
+    # Arm posture the wrist camera observes from. Currently the same joint
+    # values as reach_posture for both arms, but named separately because the
+    # two are answerable to different things: reach_posture must be nonsingular
+    # for the IK, observation_posture must let the camera see the workspace.
+    # Kept explicit so the GraspGen viewpoint is a stated choice rather than
+    # wherever the arm happened to be when the trigger step arrived.
+    observation_posture: Sequence[float]
     # Wrist camera description, or None for an arm that has none (and so
     # cannot feed GraspGen). Requires a "link" key naming the articulation link
     # it hangs under; every other key overrides sim.config.CAMERA_CONFIG. The

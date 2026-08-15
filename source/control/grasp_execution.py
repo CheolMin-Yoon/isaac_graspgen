@@ -69,6 +69,7 @@ class GraspExecutor:
         self._targets: dict[str, np.ndarray] = {}
         self._settle = 0
         self._phase_steps = 0
+        self._stalled = 0
         # Best errors seen in the current phase, so a failure can say which
         # gate it failed and how close it got. "Did not reach the pose" is not
         # actionable; "position was within 2mm but orientation plateaued at
@@ -104,6 +105,9 @@ class GraspExecutor:
         self._orientation = rotation_to_wxyz(rotation)
         self._settle = 0
         self._phase_steps = 0
+        self._stalled = 0
+        self._best_position_error = float("inf")
+        self._best_orientation_error = float("inf")
         self._phase = "pregrasp"
         self._gripper.open()
 
@@ -114,15 +118,8 @@ class GraspExecutor:
 
         cfg = self._cfg
         self._phase_steps += 1
-        if self._phase_steps > cfg.TIMEOUT_STEPS:
-            print(
-                f"[grasp] {self._phase} failed after {cfg.TIMEOUT_STEPS} steps; "
-                f"best position error={self._best_position_error * 1000:.1f}mm "
-                f"(tol {cfg.POSITION_TOL * 1000:.0f}mm), "
-                f"best orientation error={self._best_orientation_error:.3f}rad "
-                f"(tol {cfg.ORIENTATION_TOL:.3f}rad)"
-            )
-            self._phase = "failed"
+        if self._phase_steps > cfg.MAX_PHASE_STEPS:
+            self._fail(f"exceeded {cfg.MAX_PHASE_STEPS} steps")
             return self._phase
 
         if self._phase == "close":
@@ -149,10 +146,21 @@ class GraspExecutor:
                 1.0,
             )
         )
+        # Progress on either axis counts: the arm often locks position first and
+        # then spends hundreds of steps rotating, which is converging, not stuck.
+        improved = (
+            position_error < self._best_position_error - cfg.STALL_MIN_IMPROVEMENT
+            or orientation_error < self._best_orientation_error - cfg.STALL_MIN_IMPROVEMENT
+        )
         self._best_position_error = min(self._best_position_error, position_error)
         self._best_orientation_error = min(self._best_orientation_error, orientation_error)
+
         reached = position_error < cfg.POSITION_TOL and orientation_error < cfg.ORIENTATION_TOL
         self._settle = self._settle + 1 if reached else 0
+        self._stalled = 0 if (improved or reached) else self._stalled + 1
+        if self._stalled >= cfg.STALL_STEPS:
+            self._fail(f"no progress for {cfg.STALL_STEPS} steps")
+            return self._phase
 
         if self._settle >= cfg.SETTLE_STEPS:
             if self._phase == "pregrasp":
@@ -163,9 +171,21 @@ class GraspExecutor:
                 self._phase = "done"
         return self._phase
 
+    def _fail(self, reason: str) -> None:
+        cfg = self._cfg
+        print(
+            f"[grasp] {self._phase} failed ({reason}) at step {self._phase_steps}; "
+            f"best position error={self._best_position_error * 1000:.1f}mm "
+            f"(tol {cfg.POSITION_TOL * 1000:.0f}mm), "
+            f"best orientation error={self._best_orientation_error:.3f}rad "
+            f"(tol {cfg.ORIENTATION_TOL:.3f}rad)"
+        )
+        self._phase = "failed"
+
     def _enter(self, phase: str) -> None:
         self._phase = phase
         self._settle = 0
         self._phase_steps = 0
+        self._stalled = 0
         self._best_position_error = float("inf")
         self._best_orientation_error = float("inf")

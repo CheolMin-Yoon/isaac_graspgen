@@ -363,6 +363,18 @@ def main() -> None:
                 wrist_camera.maybe_capture(step)
 
             if graspgen_client is not None and not graspgen_called and step >= args.graspgen_step:
+                # The point cloud is only meaningful from the viewpoint the
+                # camera mount was validated at. Report the deviation rather
+                # than assuming the arm drifted nowhere since startup.
+                observed_q = np.asarray(robot.get_joint_positions())[: spec.num_arm_dofs]
+                posture_error = float(
+                    np.max(np.abs(observed_q - np.asarray(spec.observation_posture, dtype=float)))
+                )
+                print(
+                    f"[graspgen] observing from arm_q={observed_q.round(3).tolist()} "
+                    f"(max deviation from observation_posture: {posture_error:.3f} rad)"
+                )
+
                 target_path = ycb_paths[args.grasp_object_index]
                 grasp_target_path = target_path
                 target_label = str(ycb_config["objects"][args.grasp_object_index]["name"])

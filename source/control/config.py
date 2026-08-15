@@ -28,8 +28,13 @@ POSITION_TOL = 0.01     # m, TCP-to-target distance to consider a phase reached
 ORIENTATION_TOL = 0.15
 SETTLE_STEPS = 30       # consecutive in-tolerance steps before advancing
 CLOSE_STEPS = 90        # steps to hold the close command before lifting
-# Per-phase step budget. This is a liveness guard against a target that can
-# never be reached, not a performance target — set it well above how long a
-# slow-but-converging arm actually takes rather than tuning the controller to
-# fit it.
-TIMEOUT_STEPS = 1800
+# A phase gives up when it stops making progress, not when a step budget runs
+# out. A fixed budget forces a number that is wrong in both directions: too low
+# kills a slow-but-converging arm (the Panda's orientation legitimately takes
+# ~960 steps), too high spends that long confirming a failure that was already
+# decided. Progress is self-scaling — a fast arm fails fast, a slow one is left
+# alone as long as it keeps closing.
+STALL_STEPS = 240           # steps with no improvement before declaring failure
+STALL_MIN_IMPROVEMENT = 1e-4  # m / rad; smaller than this is noise, not progress
+# Absolute backstop, only for a phase that somehow keeps inching forever.
+MAX_PHASE_STEPS = 12_000
