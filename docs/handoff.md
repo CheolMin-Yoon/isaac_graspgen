@@ -68,6 +68,52 @@ GraspGen ZMQ 연결의 구현 범위, 실행법, 실제 검증 결과와 현재 
   저장한다. 현재는 별도 ZED USD asset을 참조하지 않고 Isaac Sim Camera prim을
   프로그램으로 생성한다.
 
+## Panda GraspGen pick 진행 상황 (2026-08-15)
+
+캔 하나(`005_tomato_soup_can`)를 Panda + GraspGen으로 집는 경로를 뚫는 중이다.
+`--ycb-only`, `--ycb-radius`로 씬을 단일 물체로 좁혀서 실험한다.
+
+동작 확인된 것:
+
+- `graspgen_franka_panda` 체크포인트 3종 다운로드 완료, 서버는
+  `./scripts/run_graspgen_server.py --gripper panda_hand`로 뜬다.
+- 손목 카메라(pinhole)가 캔을 10k 픽셀 규모로 잡고, GraspGen이 conf 0.95,
+  78 ms로 후보 20개를 반환한다. 기하 게이트도 통과한다.
+- `--ycb-radius 0.55`에서 pregrasp 자세에 도달한다. 기본 0.70은 Indy7 리치
+  기준 값이라 Panda에서는 pregrasp 자세부터 실패한다.
+
+막혀 있는 지점: **approach 단계**. 마지막 측정은
+
+```
+best position error   = 26.1mm (tol 10mm)   실패
+best orientation error= 0.122rad (tol 0.150) 통과
+캔 회전 = 19.98도
+```
+
+자세는 맞고 위치가 26 mm 부족한데, 캔이 20도 돌아간 것은 손가락이 캔에 닿고
+있다는 뜻이다. 즉 팔이 못 뻗는 게 아니라 **물체에 막힌 것**이다. 캔 지름
+66 mm에 그리퍼 개구가 70 mm(`open_position=0.035`)라 편측 여유 2 mm뿐이었고,
+이는 approach의 자세 허용 오차(7도)보다 작다. `open_position`을 관절 한계인
+0.04(개구 80 mm)로 올려두었으나 **아직 검증하지 못했다.**
+
+## Isaac Sim 간헐적 크래시 (미해결, 최대 병목)
+
+시작 직후 SIGSEGV(exit 139)로 죽는다. 실험 자체를 막고 있으므로 다른 무엇보다
+먼저 잡아야 한다. **크래시를 수렴 실패로 오독하지 않도록 로그의
+`A crash has occurred` 유무를 항상 먼저 확인할 것.**
+
+지금까지 세운 가설과 그 결과 — 셋 다 틀렸거나 불충분했다:
+
+- "카메라 aperture를 살아있는 상태에서 바꾸는 게 원인" — 그 패턴이 크래시 직전
+  마지막 동작인 건 맞고 prim에 직접 authoring하도록 고쳤지만, 이후에도 재발했다.
+- "단독 실행이면 안 죽는다" — 단독에서도 죽었다.
+- "실행 간 8초 간격이면 안 죽는다" — 6/6 통과했으나 그 테스트는 `--graspgen`
+  **없는** 120스텝 실행이었다. 실패하는 구성을 검증하지 않은 일반화였다.
+
+다음에 볼 것: 크래시한 실행이 거의 전부 `--graspgen`이었으므로 **GraspGen
+서버(GPU 상주 약 844 MB)와의 경합**이 유력하다. 서버 유무로 동일 씬을 반복
+실행해 크래시율을 비교하면 갈린다.
+
 ## 알려진 미해결 이슈
 
 - `indy7_v2.usd`의 관절 `maxForce=100`은 실제 Indy7 축별 스펙 기준 검증값이
@@ -80,6 +126,18 @@ GraspGen ZMQ 연결의 구현 범위, 실행법, 실제 검증 결과와 현재 
   않는다. target을 close가 아니라 approach에서 dynamic으로 해제하도록 교정했지만,
   이 변경 뒤 실제 lift 성공은 아직 재검증하지 않았다. object z/contact 기반
   lift-success gate가 다음 제어 작업이다.
+- Panda는 베이스가 바닥(z=0)에 있고 물체도 바닥에 있다. Franka는 보통 테이블에
+  설치해 같은 면의 물체를 집으므로, 자기 베이스 높이까지 손을 내리는 현재 배치가
+  approach 실패에 기여할 수 있다. `RobotSpec.position`으로 바로 검증 가능하다.
+- 씬에 조명을 authoring하지 않던 문제를 고쳤다(`add_dome_light`). 조명이 없으면
+  RGB뿐 아니라 **depth annotator도 유효 픽셀을 반환하지 않아** "카메라가 허공을
+  본다"와 증상이 완전히 같다. Indy7 자산이 조명을 품고 있어 로봇이 하나일 때는
+  드러나지 않았다.
+- IsaacLab에서 값을 가져올 때 세 번 연속 같은 실수를 했다. 값은 맞아도 맥락이
+  같이 오지 않는다: PINK 게인은 예제에 수렴 판정 자체가 없었고, 카메라 오프셋
+  쿼터니언은 IsaacLab의 ROS 규약이라 USD local pose에 직접 쓰면 하늘을 보며,
+  렌즈 파라미터는 spawn 시점에 적용해야 하는 값이었다. **"공식 예제 값"은
+  적용 시점과 좌표 규약까지 확인하고 쓸 것.**
 - 카메라 mount pose는 Indy7 TCP 기준 초기값이다. 실제 ZED 형상/시야와 맞추려면
   mount offset, orientation, intrinsics를 조정해야 한다.
 
