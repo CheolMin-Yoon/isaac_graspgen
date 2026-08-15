@@ -33,8 +33,13 @@ def main() -> None:
     env.setdefault("ISAAC_GRASPGEN_CPU_THREADS", DEFAULT_CPU_THREADS)
     env["ROS_DISTRO"] = "jazzy"
     env["RMW_IMPLEMENTATION"] = "rmw_fastrtps_cpp"
-    prior = env.get("LD_LIBRARY_PATH")
-    env["LD_LIBRARY_PATH"] = f"{prior}:{ISAACSIM_ROS2_LIB}" if prior else ISAACSIM_ROS2_LIB
+    # Isaac ships its own jazzy tree and the system has one at /opt/ros/jazzy.
+    # Putting both in reach means the same SONAMEs come from two places, which
+    # is a known way to make ld.so fail its dl-close assertion. Skip the
+    # injection entirely when the bridge is not being started.
+    if "--no-ros2" not in sys.argv[1:]:
+        prior = env.get("LD_LIBRARY_PATH")
+        env["LD_LIBRARY_PATH"] = f"{prior}:{ISAACSIM_ROS2_LIB}" if prior else ISAACSIM_ROS2_LIB
     cpu_threads = env["ISAAC_GRASPGEN_CPU_THREADS"]
     env["PXR_WORK_THREAD_LIMIT"] = cpu_threads
     env["OPENBLAS_NUM_THREADS"] = cpu_threads

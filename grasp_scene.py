@@ -49,6 +49,13 @@ parser.add_argument(
 )
 parser.add_argument("--headless", action="store_true", help="GUI 없이 실행")
 parser.add_argument(
+    "--no-ros2",
+    action="store_true",
+    help="ROS2 bridge와 Action Graph를 켜지 않는다. grasp 파이프라인은 ROS2를 쓰지 않으며, "
+    "시스템 /opt/ros/jazzy와 Isaac 번들 jazzy가 같은 SONAME을 두 벌 제공해서 ld.so가 "
+    "언로드 중 깨지는 것으로 의심되는 시작 크래시를 가르기 위한 스위치다.",
+)
+parser.add_argument(
     "--ycb-dynamic",
     action="store_true",
     help="세틀 후에도 YCB를 고정하지 않고 dynamic으로 둔다. 스폰 자세가 물리적으로 "
@@ -171,7 +178,8 @@ def main() -> None:
     spec = get_robot(args.robot)
     base_position = np.asarray(spec.position, dtype=float)
 
-    enable_extension("isaacsim.ros2.bridge")
+    if not args.no_ros2:
+        enable_extension("isaacsim.ros2.bridge")
     enable_extension("isaacsim.robot_motion.pink")
     enable_extension("isaacsim.robot_setup.assembler")
     simulation_app.update()
@@ -218,11 +226,14 @@ def main() -> None:
 
     world.reset()
     settle_ycb(world, ycb_paths, pin=not args.ycb_dynamic)
-    graph_path = create_ros2_action_graph(robot.prim_path)
-    simulation_app.update()
-    print(f"[ros2] Action Graph: {graph_path}")
-    print(f"[ros2] Publisher: {JOINT_STATES_TOPIC}, {CLOCK_TOPIC}, {TF_TOPIC}")
-    print(f"[ros2] Subscriber: {JOINT_COMMAND_TOPIC}")
+    if args.no_ros2:
+        print("[ros2] disabled (--no-ros2)")
+    else:
+        graph_path = create_ros2_action_graph(robot.prim_path)
+        simulation_app.update()
+        print(f"[ros2] Action Graph: {graph_path}")
+        print(f"[ros2] Publisher: {JOINT_STATES_TOPIC}, {CLOCK_TOPIC}, {TF_TOPIC}")
+        print(f"[ros2] Subscriber: {JOINT_COMMAND_TOPIC}")
     set_camera_view(
         eye=[1.2, 1.0, 0.9],
         target=[0.35, 0.0, 0.15],
