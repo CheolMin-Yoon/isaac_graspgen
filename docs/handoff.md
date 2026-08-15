@@ -20,8 +20,8 @@ GraspGen ZMQ 연결의 구현 범위, 실행법, 실제 검증 결과와 현재 
   이전 handoff는 "isaac_indy7는 Indy7 전용으로 유지한다"고 적었으나, Panda를
   같은 워크스페이스에서 다루기로 하면서 뒤집혔다. 팔은 `--robot`으로 고르고,
   로봇 종속 사실은 `source/robots/<name>/`의 `SPEC`(`RobotSpec`)에 모은다.
-  현재 등록된 로봇은 `indy7` 하나이고 `panda`는 미구현이다 — 추가 절차와
-  아직 추상화되지 않은 부분은 `source/robots/panda/README.md`에 적어뒀다.
+  등록된 로봇은 `panda`(기본값)와 `indy7`이다. Panda는 스폰/IK/카메라/GraspGen
+  추론까지 동작하고 approach 단계에서 막혀 있다 — 아래 진행 상황 절을 볼 것.
 - 루트 실행 파일은 `grasp_scene.py` 하나, 실행은 `scripts/*.py` 파이썬 런처로
   한다. 재사용 코드는 `source/` 밑 주제별 패키지(`robots/`=로봇 레지스트리·IK·
   그리퍼·로봇 자산, `sim/`=YCB·카메라·ros2, `control/`=grasp 실행,
@@ -116,6 +116,9 @@ IsaacLab 실측 대조로 반증된 가설:
 — `/home/frlab/GraspGenModels/checkpoints/graspgen_franka_panda.yml`과 GraspGen
 저장소의 gripper 정의를 볼 것. 목표가 물체 안쪽으로 파고들면 팔이 캔에 막혀
 정확히 지금 같은 정체가 생긴다.
+
+그 다음 후보:
+
 - **Franka USD가 다르다**: IsaacLab은 `{ISAACLAB_NUCLEUS_DIR}/Robots/FrankaEmika/
   panda_instanceable.usd`를 쓴다(`franka.py:28`). 우리가 쓰는
   `/Isaac/Robots/FrankaRobotics/FrankaPanda/franka.usd`는 `Gripper`/`Mesh`
@@ -165,9 +168,6 @@ IsaacLab 실측 대조로 반증된 가설:
   않는다. target을 close가 아니라 approach에서 dynamic으로 해제하도록 교정했지만,
   이 변경 뒤 실제 lift 성공은 아직 재검증하지 않았다. object z/contact 기반
   lift-success gate가 다음 제어 작업이다.
-- Panda는 베이스가 바닥(z=0)에 있고 물체도 바닥에 있다. Franka는 보통 테이블에
-  설치해 같은 면의 물체를 집으므로, 자기 베이스 높이까지 손을 내리는 현재 배치가
-  approach 실패에 기여할 수 있다. `RobotSpec.position`으로 바로 검증 가능하다.
 - 씬에 조명을 authoring하지 않던 문제를 고쳤다(`add_dome_light`). 조명이 없으면
   RGB뿐 아니라 **depth annotator도 유효 픽셀을 반환하지 않아** "카메라가 허공을
   본다"와 증상이 완전히 같다. Indy7 자산이 조명을 품고 있어 로봇이 하나일 때는
