@@ -108,7 +108,24 @@ IsaacLab 실측 대조로 반증된 가설:
 `frictionCorrelationDistance` 0.00625과 YCB solver 16/1을 적용했으나 **효과가
 없었다** — 27.7 mm로 여전하다. 접촉 물리 파라미터는 원인이 아니다.
 
-**가장 유력한 남은 가설: TCP 프레임 불일치.** 오차가 그리퍼 폭·마찰·반경을 바꿔도
+**TCP 프레임 가설은 GraspGen 소스 확인으로 약해졌다.** 확인한 사실:
+
+- `grasp_gen/models/action_decoder.py:36` — `grasp_translation = contact_pt -
+  gripper_depth * approach_dir`. 즉 반환 pose는 **gripper base 프레임**이고 tool
+  center는 `base + depth*approach`다. 우리 선택 게이트와 일치한다.
+- `graspgen_franka_panda.yml`의 `gripper_depth: 0.1034` — IsaacLab의
+  hand→fingertip midpoint와 같은 값.
+- `grasp_gen/robot.py:385-392` — `transform_from_base_link_to_tool_tcp`는 gripper
+  모듈이 오버라이드하지 않으면 **순수 z 평행이동 `[0,0,depth]`**다.
+
+따라서 `TCP_OFFSET=0`으로 `panda_hand`를 구동하는 것은 GraspGen의 base link가
+`panda_hand`인 한 맞다. 남은 확인거리는 그 base link가 `panda_hand`인지
+`panda_link8`인지다 — 후자라면 둘은 z축 45도 회전만 차이나므로 **27 mm 위치
+오차는 설명하지 못한다**(자세 오차도 0.122 rad로 45도와 맞지 않는다).
+
+즉 상수 오차의 출처는 아직 미상이다. 다음에 볼 것: 실행 중 실제 `panda_hand`
+world pose와 명령된 target을 나란히 찍어 **어느 축으로 27 mm가 벌어지는지** 본다.
+접근축 방향이면 depth 계열, 수직이면 다른 원인이다. 이전 가설: 오차가 그리퍼 폭·마찰·반경을 바꿔도
 23.9 / 26.1 / 27.7 / 30.0 mm로 일정하게 유지되는 것은 접촉 현상이 아니라 **상수
 오프셋의 서명**이다. 우리는 `ee_link_name="panda_hand"`로 panda_hand를 직접 구동하고
 `TCP_OFFSET=0`이다. 반면 IsaacLab은 IK가 panda_hand +0.107 프레임을 구동하고 파지
