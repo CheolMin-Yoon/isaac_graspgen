@@ -24,6 +24,12 @@ Repo: https://github.com/CheolMin-Yoon/isaac_graspgen
   API를 직접 써서 스폰/IK/카메라를 조립한다.
 - 반드시 Isaac Sim 번들 python으로 실행한다. 시스템 python에는 `isaacsim`/`omni`/`pxr`
   모듈이 없다.
+- 번들 python에 IsaacLab을 `pip install`했다면 `pin-pink`가 3.1.0으로 내려가 있고
+  Isaac의 `isaacsim.robot_motion.pink` 확장이 import에 실패한다(IK 전부 무력화,
+  로그에 `cannot import name 'NoSolutionFound'`). 한 번
+  `./scripts/install_pink_overlay.py`를 실행하면 4.2.0을 `.pink_overlay/`에 복구하고
+  `run_scene.py`가 그 경로를 PYTHONPATH 앞에 둔다. 공유 site-packages는 건드리지
+  않는다. 자세한 내용은 `docs/config/runtime-environments.md`.
 - 단, `tests/`는 Isaac 없이 도는 순수 pytest이고 실행 python이 또 다르다.
   Isaac 번들 python에는 `numpy`가, 시스템 python에는 `msgpack-numpy`가 없다.
   현재 세 의존성(`pyzmq`/`msgpack`/`msgpack-numpy`)이 모두 있는 건 graspgen
@@ -54,7 +60,7 @@ approach 진입 시 다시 dynamic으로 해제한다.
 > 물체별 이동/회전량을 출력하므로, 배치가 실제로 안정한지 바로 보인다.
 
 ```bash
-cd ~/isaac_graspgen
+cd ~/Grasp/isaac_graspgen
 ```
 
 ## Structure
@@ -64,7 +70,7 @@ cd ~/isaac_graspgen
 [`source/robots/panda/README.md`](source/robots/panda/README.md)에 있다.
 
 ```
-~/isaac_graspgen/
+~/Grasp/isaac_graspgen/
 ├── README.md
 ├── docs/
 │   ├── handoff.md
@@ -116,8 +122,8 @@ GraspGen 모델은 별도 Conda 환경/ZMQ 서버에 유지하고 Isaac Sim은 p
 두 Python 런타임의 경로, 의존성 경계, gripper별 실행 조합과 연결 점검은
 [`docs/config/runtime-environments.md`](docs/config/runtime-environments.md)에 정리했다.
 
-> 경로 주의: 업스트림 NVIDIA GraspGen 체크아웃은 `/home/frlab/GraspGen`이고,
-> 이 워크스페이스는 `/home/frlab/isaac_graspgen`이다. 이름이 비슷하지만 서로
+> 경로 주의: 업스트림 NVIDIA GraspGen 체크아웃은 `/home/frlab/Grasp/GraspGen`이고,
+> 이 워크스페이스는 `/home/frlab/Grasp/isaac_graspgen`이다. 이름이 비슷하지만 서로
 > 다른 저장소이며, 둘은 ZMQ로만 통신한다. 서버 경로는
 > `source/graspgen/config.py`의 `SERVER_ROOT`에 있다.
 
@@ -137,11 +143,36 @@ GraspGen 모델은 별도 Conda 환경/ZMQ 서버에 유지하고 Isaac Sim은 p
 ./scripts/run_graspgen_server.py --gripper panda_hand
 ```
 
+> 씬의 로봇과 서버 체크포인트는 반드시 짝을 맞춘다 — `--robot panda` ↔
+> `--gripper panda_hand`, `--robot indy7` ↔ `--gripper robotiq_2f_140`.
+> 서버 기본값이 `robotiq_2f_140`이므로 **Panda 씬에는 `--gripper panda_hand`를
+> 명시해야 한다.** 현재 client는 불일치를 자동으로 거부하지 않아 에러 없이
+> 이상한 grasp 형상만 나온다. 서버의 `--gripper`는 모델 종류이고 씬의
+> `--gripper open|close|hold`는 초기 관절 명령이다 — 이름만 같다.
+
 터미널 2에서 wrist-camera cloud를 Isaac instance mask로 선택한 뒤 2048점으로
 맞춰 GraspGen에 한 번 전송한다.
 
 ```bash
 ./scripts/run_scene.py --graspgen --grasp-object-index 0 --graspgen-step 180
+```
+
+Panda 단일 캔 pick 검증 설정(2026-08-26에 GUI에서 pregrasp→approach→close→lift
+진입까지 확인, `docs/handoff.md` 참조):
+
+```bash
+./scripts/run_scene.py --no-ros2 --robot panda --ycb-only 005_tomato_soup_can \
+  --ycb-radius 0.55 --graspgen --graspgen-step 180 --execute-grasp
+```
+
+`--ycb-radius 0.55`는 Panda 리치 기준값이다 — 기본 0.70은 Indy7 기준이라
+Panda는 pregrasp 자세부터 실패한다. lift까지의 최종 `bottom_z`를 로그에
+남기려면 창을 닫지 말고 headless로 끝까지 돌린다:
+
+```bash
+./scripts/run_scene.py --no-ros2 --headless --max-steps 1500 \
+  --robot panda --ycb-only 005_tomato_soup_can \
+  --ycb-radius 0.55 --graspgen --graspgen-step 180 --execute-grasp
 ```
 
 반환된 grasp 중 상위 pose는 viewport에 RGB 축으로 표시한다. 동일한 입력과 최고

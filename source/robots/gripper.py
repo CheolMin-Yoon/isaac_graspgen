@@ -259,8 +259,8 @@ ROBOTIQ_2F_140 = GripperSpec(
     # The official Robotiq asset places the tool center 0.195 m along local +z
     # from the base pose GraspGen returns.
     graspgen_depth=0.195,
-    graspgen_gripper_config="/home/frlab/GraspGenModels/checkpoints/graspgen_robotiq_2f_140.yml",
-    graspgen_generator_checkpoint="/home/frlab/GraspGenModels/checkpoints/graspgen_robotiq_2f_140_gen.pth",
+    graspgen_gripper_config="/home/frlab/Grasp/GraspGenModels/checkpoints/graspgen_robotiq_2f_140.yml",
+    graspgen_generator_checkpoint="/home/frlab/Grasp/GraspGenModels/checkpoints/graspgen_robotiq_2f_140_gen.pth",
     make=SingleJointGripper,
 )
 
@@ -278,8 +278,8 @@ PANDA_HAND = GripperSpec(
     graspgen_depth=0.1034,
     # External model assets are intentionally referenced rather than copied
     # into this repo; the server launcher validates both paths before startup.
-    graspgen_gripper_config="/home/frlab/GraspGenModels/checkpoints/graspgen_franka_panda.yml",
-    graspgen_generator_checkpoint="/home/frlab/GraspGenModels/checkpoints/graspgen_franka_panda_gen.pth",
+    graspgen_gripper_config="/home/frlab/Grasp/GraspGenModels/checkpoints/graspgen_franka_panda.yml",
+    graspgen_generator_checkpoint="/home/frlab/Grasp/GraspGenModels/checkpoints/graspgen_franka_panda_gen.pth",
     make=ParallelFingerGripper,
 )
 

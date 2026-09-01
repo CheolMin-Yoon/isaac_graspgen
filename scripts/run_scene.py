@@ -19,6 +19,14 @@ import sys
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ISAACSIM_ROOT = os.path.expanduser("~/isaacsim")
+# Isaac Sim 6.0.1 ships pin-pink 4.2.0 inside the pink extension's
+# pip_prebundle, but that directory is on Isaac's PYTHONPATH, so installing
+# IsaacLab (pin-pink==3.1.0) into the bundle python uninstalled it. The 3.1.0
+# left in site-packages lacks ``NoSolutionFound`` and isaacsim.robot_motion.pink
+# fails to import. scripts/install_pink_overlay.py restores 4.2.0 here; putting
+# it first on PYTHONPATH fixes the extension without touching the shared
+# Isaac/IsaacLab site-packages.
+PINK_OVERLAY = os.path.join(PROJECT_ROOT, ".pink_overlay")
 ISAACSIM_ROS2_LIB = os.path.join(ISAACSIM_ROOT, "exts", "isaacsim.ros2.core", "jazzy", "lib")
 DEFAULT_CPU_THREADS = "8"
 DEFAULT_KIT_ARGS = [
@@ -33,6 +41,9 @@ def main() -> None:
     env.setdefault("ISAAC_GRASPGEN_CPU_THREADS", DEFAULT_CPU_THREADS)
     env["ROS_DISTRO"] = "jazzy"
     env["RMW_IMPLEMENTATION"] = "rmw_fastrtps_cpp"
+    if os.path.isdir(PINK_OVERLAY):
+        prior = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = f"{PINK_OVERLAY}:{prior}" if prior else PINK_OVERLAY
     # Isaac ships its own jazzy tree and the system has one at /opt/ros/jazzy.
     # Putting both in reach means the same SONAMEs come from two places, which
     # is a known way to make ld.so fail its dl-close assertion. Skip the

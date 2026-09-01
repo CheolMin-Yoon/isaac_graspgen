@@ -12,6 +12,14 @@ GraspGen ZMQ 연결의 구현 범위, 실행법, 실제 검증 결과와 현재 
 - Runtime: Isaac Sim standalone 6.0.1 (`~/isaacsim`)뿐이다. **Isaac Lab은
   필요 없다** — manager-based task/gym 등록 없이 `isaacsim.core` API를
   직접 조립해서 쓴다.
+- **2026-08-26 환경 복구.** 08-15 14:22에 번들 python에 IsaacLab(`pin-pink==3.1.0`
+  고정)을 설치하면서 pip이 Isaac pink 확장의 prebundle 4.2.0을 지웠고, 그 뒤로
+  `isaacsim.robot_motion.pink` import가 실패해 IK가 전부 무력화된 상태였다
+  (아래 Panda 기록은 전부 그날 오전, 4.2.0으로 낸 것). 또 저장소들이
+  `/home/frlab/Grasp/` 아래로 옮겨져 `SERVER_ROOT`·체크포인트 경로와 conda의
+  `grasp_gen` editable 링크가 끊겨 있었다. `scripts/install_pink_overlay.py`
+  (+ `run_scene.py`의 PYTHONPATH 선행), 경로 수정, `pip install -e` 재실행으로
+  복구했다. 같은 날 재현 결과는 아래 "2026-08-26 재현" 절에 있다.
 - 워크스페이스명은 `isaac_graspgen`으로 확정(2026-08-15 리네임; 이전 이름
   `isaac_indy7`, 그 전 `isaac_gnn`). 동명의 내부 파이썬 패키지는 2026-08-12에
   `sim/`·`control/`·`graspgen/`으로 분해됐고, 2026-08-15에 로봇 종속 코드가
@@ -30,7 +38,7 @@ GraspGen ZMQ 연결의 구현 범위, 실행법, 실제 검증 결과와 현재 
   각 패키지 설정은 자기 `config.py`, 씬 USD 자산은 `source/assets/`,
   로봇 USD 자산은 `source/robots/<name>/assets/` 아래에 둔다.
 - Repo: https://github.com/CheolMin-Yoon/isaac_graspgen
-- 업스트림 NVIDIA GraspGen 체크아웃(`/home/frlab/GraspGen`)은 이 워크스페이스와
+- 업스트림 NVIDIA GraspGen 체크아웃(`/home/frlab/Grasp/GraspGen`)은 이 워크스페이스와
   다른 저장소다. 이름이 비슷해졌으니 경로를 혼동하지 않는다 — 둘은 ZMQ로만
   통신하고, 서버 경로는 `source/graspgen/config.py`의 `SERVER_ROOT`에 있다.
 - FFW(AI Worker BG2/SG2/SH5) USD들은 이 워크스페이스 소속이 아니다 —
@@ -242,6 +250,42 @@ phase: lift -> done
 또한 실행 간 편차가 크다. 같은 설정에서 approach가 통과하기도 하고 8 mm 못 미쳐
 실패하기도 한다. 수직에 가까운 파지가 선택되면 손가락이 캔에 부딪히며 밀어낸다.
 
+### 2026-08-26 재현 (환경 복구 후, 크래시 0/3)
+
+명령은 두 터미널이다. 서버가 `listening` 로그를 낸 뒤 씬을 띄운다.
+
+```bash
+# 터미널 1
+cd ~/Grasp/isaac_graspgen
+./scripts/run_graspgen_server.py --gripper panda_hand
+
+# 터미널 2 (GUI; headless 검사는 --headless --max-steps 1500 추가)
+cd ~/Grasp/isaac_graspgen
+./scripts/run_scene.py --no-ros2 --robot panda --ycb-only 005_tomato_soup_can \
+  --ycb-radius 0.55 --graspgen --graspgen-step 180 --execute-grasp
+```
+
+같은 설정으로 두 번 돌려 결과가 갈렸다 — "실행 간 편차가 크다"는 위 관측이 그대로다.
+
+- **headless**: 60개 중 23개 게이트 통과, 점군 centring 0.0 mm 후보 선택(오라클 기준
+  along-y −2.7 mm로 실제로도 잘 맞았다). pregrasp 2.1 mm 추종 후 **approach 실패**:
+  최선 5.5 mm(tol 4 mm), 손가락이 `measured=0.0092 effort=25`로 눌림 — 위 "실행: 수직
+  하강 중 손가락이 으스러진다"와 동일한 실패.
+- **GUI**: 60개 중 17개 통과, 점군 centring **−0.2 mm**라고 판단한 후보를 골랐으나
+  오라클 기준 along-y는 **+21.9 mm**였다(같은 회차의 #2·#4·#8은 0.2–0.4 mm인데
+  unreachable/outward로 탈락). 그런데도 pregrasp 0.2 mm → approach 1.9 mm 추종 →
+  close → **lift 진입**까지 갔고, lift에서 손가락이 `q=0.0349`(span 69.8 mm)에
+  `effort=7.2`(max_effort 포화)로 멈췄다 — 08-15 오라클 최선 상태(0.0349 / 69.5 mm)와
+  같은 "캔을 문" 계측이다. 다만 straddle은 −14.9 mm로 편심이고, **창을 lift 도중
+  (step 960)에 닫아서 `lift -> done`과 최종 `bottom_z`는 로그에 없다.** 눈으로는 lift
+  동작을 봤으나 캔이 실제로 들렸는지는 미기록이다.
+
+두 실행에서 공통으로 보인 것: 점군 centroid는 진짜 중심보다 z로 +36 mm 위(윗면
+쪽)에 있고, 점군 기준 centring이 −0.2 mm라고 한 후보가 실제로는 +21.9 mm였다.
+"지각: 점군에서 물체 축 추정" 문제가 파지 성패를 여전히 좌우한다. 다음 실행은
+`--headless --max-steps 1500`으로 끝까지 돌려 lift 후 `bottom_z`를 남기고, 성공률은
+같은 설정 반복으로 잰다.
+
 ### 이전 조사 기록 (위 원인으로 대체됨)
 
 막혀 있던 지점: **approach 단계**. 당시 측정은
@@ -292,7 +336,7 @@ world pose와 명령된 target을 나란히 찍어 **어느 축으로 27 mm가 �
 오프셋의 서명**이다. 우리는 `ee_link_name="panda_hand"`로 panda_hand를 직접 구동하고
 `TCP_OFFSET=0`이다. 반면 IsaacLab은 IK가 panda_hand +0.107 프레임을 구동하고 파지
 판정은 +0.1034를 쓴다. GraspGen의 Franka 규약이 어느 프레임 기준인지 확인해야 한다
-— `/home/frlab/GraspGenModels/checkpoints/graspgen_franka_panda.yml`과 GraspGen
+— `/home/frlab/Grasp/GraspGenModels/checkpoints/graspgen_franka_panda.yml`과 GraspGen
 저장소의 gripper 정의를 볼 것. 목표가 물체 안쪽으로 파고들면 팔이 캔에 막혀
 정확히 지금 같은 정체가 생긴다.
 

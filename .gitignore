@@ -6,5 +6,8 @@ __pycache__/
 output/
 *.usd.log
 
+# pin-pink 4.2.0 overlay restored by scripts/install_pink_overlay.py
+.pink_overlay/
+
 # Editor/agent settings
 .claude/

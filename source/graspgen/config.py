@@ -50,9 +50,9 @@ MAX_CLOSING_AXIS_OFFSET = 0.008
 
 # --- server (launched by scripts/run_graspgen_server.py) ---
 # NOTE: SERVER_ROOT is the upstream NVIDIA GraspGen checkout — a *different*
-# repo from this workspace.  This workspace is /home/frlab/isaac_graspgen and
-# only speaks to that server over ZMQ; do not conflate the two paths.
-SERVER_ROOT = "/home/frlab/GraspGen"
+# repo from this workspace.  This workspace is /home/frlab/Grasp/isaac_graspgen
+# and only speaks to that server over ZMQ; do not conflate the two paths.
+SERVER_ROOT = "/home/frlab/Grasp/GraspGen"
 SERVER_PYTHON = "/home/frlab/anaconda3/envs/graspgen/bin/python"
 # Per-gripper checkpoints live on the GripperSpec (robots/gripper.py) because
 # GraspGen is trained per gripper, not per arm.

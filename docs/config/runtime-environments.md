@@ -31,7 +31,7 @@ scripts/run_scene.py                          scripts/run_graspgen_server.py
 | 설정 | 파일 | 현재 값 또는 역할 |
 |---|---|---|
 | server host·port·timeout | `source/graspgen/config.py` | `127.0.0.1:5556`, 60초 |
-| GraspGen checkout | `source/graspgen/config.py` | `/home/frlab/GraspGen` |
+| GraspGen checkout | `source/graspgen/config.py` | `/home/frlab/Grasp/GraspGen` |
 | server Python | `source/graspgen/config.py` | `.../envs/graspgen/bin/python` |
 | gripper별 YAML·checkpoint | `source/robots/gripper.py` | Robotiq/Panda model 경로 |
 | Isaac launcher | `scripts/run_scene.py` | `~/isaacsim/python.sh`로 실행 |
@@ -48,9 +48,9 @@ Isaac 프로세스로 상속되지 않도록 두 프로그램은 각각 새 터�
 ```bash
 test -x /home/frlab/isaacsim/python.sh
 test -x /home/frlab/anaconda3/envs/graspgen/bin/python
-test -f /home/frlab/GraspGen/client-server/graspgen_server.py
+test -f /home/frlab/Grasp/GraspGen/client-server/graspgen_server.py
 
-cd /home/frlab/GraspGen
+cd /home/frlab/Grasp/GraspGen
 /home/frlab/anaconda3/envs/graspgen/bin/python -c \
   "import torch, zmq, msgpack; print(torch.__version__, torch.version.cuda)"
 ```
@@ -59,7 +59,7 @@ Isaac Sim bundle Python에는 server의 PyTorch stack이 아니라 가벼운 cli
 세 개만 설치한다.
 
 ```bash
-cd /home/frlab/isaac_graspgen
+cd /home/frlab/Grasp/isaac_graspgen
 ./scripts/install_graspgen_client_deps.py
 
 /home/frlab/isaacsim/python.sh -c \
@@ -69,6 +69,26 @@ cd /home/frlab/isaac_graspgen
 `ModuleNotFoundError: No module named 'zmq'`가 나오면 위 설치 스크립트를 다시
 실행한다. Isaac Sim 설치 디렉터리를 교체하면 bundle Python의 package도 함께
 사라질 수 있다.
+
+Isaac의 pink 확장이 기대하는 `pin-pink` 4.2.0을 워크스페이스 overlay에 복구한다.
+
+```bash
+./scripts/install_pink_overlay.py
+
+PYTHONPATH=/home/frlab/Grasp/isaac_graspgen/.pink_overlay /home/frlab/isaacsim/python.sh -c \
+  "import pink; from pink.exceptions import NoSolutionFound; print(pink.__version__)"
+```
+
+이 단계가 필요한 이유: Isaac Sim 6.0.1은 pin-pink 4.2.0을
+`~/isaacsim/exts/isaacsim.robot_motion.pink/pip_prebundle`에 싣고 그 디렉터리를
+PYTHONPATH에 올린다. 그 상태에서 bundle Python에 IsaacLab(`pin-pink==3.1.0` 고정)을
+`pip install`하면 pip이 prebundle의 4.2.0을 "기존 설치"로 보고 지우고 site-packages에
+3.1.0을 남긴다(2026-08-15 14:22에 실제로 일어남). 3.1.0에는
+`pink.exceptions.NoSolutionFound`가 없어 `isaacsim.robot_motion.pink` 확장이
+import에 실패하고, 이 워크스페이스의 IK 경로가 전부 무력화된다. overlay는
+`run_scene.py`가 PYTHONPATH 앞에 붙이므로 IsaacLab이 쓰는 site-packages 3.1.0은
+그대로 남는다. GraspGen 저장소를 옮겼다면 conda 환경의 editable 링크도 다시 건다:
+`/home/frlab/anaconda3/envs/graspgen/bin/python -m pip install --no-deps -e /home/frlab/Grasp/GraspGen`.
 
 ## 실행
 
@@ -87,14 +107,14 @@ server checkpoint의 gripper와 scene robot의 실제 gripper가 일치해야 �
 터미널 1에서 Panda checkpoint server를 띄운다.
 
 ```bash
-cd /home/frlab/isaac_graspgen
+cd /home/frlab/Grasp/isaac_graspgen
 ./scripts/run_graspgen_server.py --gripper panda_hand
 ```
 
 터미널 2에서 기본 Panda scene을 연결한다.
 
 ```bash
-cd /home/frlab/isaac_graspgen
+cd /home/frlab/Grasp/isaac_graspgen
 ./scripts/run_scene.py \
   --robot panda \
   --graspgen \
@@ -107,14 +127,14 @@ cd /home/frlab/isaac_graspgen
 터미널 1:
 
 ```bash
-cd /home/frlab/isaac_graspgen
+cd /home/frlab/Grasp/isaac_graspgen
 ./scripts/run_graspgen_server.py --gripper robotiq_2f_140
 ```
 
 터미널 2:
 
 ```bash
-cd /home/frlab/isaac_graspgen
+cd /home/frlab/Grasp/isaac_graspgen
 ./scripts/run_scene.py \
   --robot indy7 \
   --graspgen \
@@ -133,7 +153,7 @@ ss -ltnp | rg ':5556\b'
 Isaac bundle Python에서 protocol health check만 실행할 수도 있다.
 
 ```bash
-cd /home/frlab/isaac_graspgen
+cd /home/frlab/Grasp/isaac_graspgen
 PYTHONPATH="$PWD/source" /home/frlab/isaacsim/python.sh -c \
   "from graspgen.client import GraspGenClient; c=GraspGenClient(); print('health:', c.health_check()); print('metadata:', c.metadata()); c.close()"
 ```
@@ -195,6 +215,8 @@ robot의 gripper와 일치하는지 확인한다. 현재 scene client는 metadat
 | 증상 | 확인할 위치 |
 |---|---|
 | Isaac에서 `No module named 'zmq'` | `install_graspgen_client_deps.py` 재실행 |
+| Isaac 로그에 `cannot import name 'NoSolutionFound' from 'pink.exceptions'`, 이후 `[ik]` 로그 없이 팔이 정지 | `install_pink_overlay.py` 실행 — IsaacLab 설치가 pin-pink를 3.1.0으로 내린 것 |
+| server가 `No module named 'grasp_gen'` | GraspGen 저장소 이동 후 editable 링크 단절; conda 환경에서 `pip install --no-deps -e /home/frlab/Grasp/GraspGen` |
 | `server is not ready at ...` | server 프로세스, host/port, `ss` 결과 |
 | launcher가 `Missing GraspGen file`로 종료 | `source/robots/gripper.py`의 외부 model 경로 |
 | 연결됐지만 grasp 형상이 맞지 않음 | server metadata와 robot/gripper 조합 |
@@ -204,6 +226,6 @@ robot의 gripper와 일치하는지 확인한다. 현재 scene client는 metadat
 순수 bridge test는 Isaac을 시작하지 않고 현재 GraspGen Conda 환경으로 실행한다.
 
 ```bash
-cd /home/frlab/isaac_graspgen
+cd /home/frlab/Grasp/isaac_graspgen
 /home/frlab/anaconda3/envs/graspgen/bin/python -m pytest tests/test_graspgen_bridge.py -q
 ```
